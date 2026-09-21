@@ -28,3 +28,81 @@ class input_wave:
         return self.gaussian_pulse(
             t, self.t_center, self.sigma, self.Iin_peak
         )
+
+
+    '''def build_mpsk_waveform(
+        self,
+        phase,
+        t_input,
+        t_center,
+        sigma,
+        Iin_peak,
+        fc,
+        noise_enabled=False,
+        snr_db=20.0,
+        seed=1234
+    ):
+
+        # --------------------------------------------------------
+        # clean waveform
+        # --------------------------------------------------------
+
+        u_clean = phase_modulated_pulse(
+            t=t_input,
+            center=t_center,
+            sigma=sigma,
+            I_peak=Iin_peak,
+            fc=fc,
+            phase=phase
+        )
+
+        # --------------------------------------------------------
+        # region used for SNR calculation
+        # --------------------------------------------------------
+
+        power_mask = (
+            np.abs(t_input - t_center)
+            <= 3.0 * sigma
+        )
+
+        # --------------------------------------------------------
+        # optional AWGN
+        # --------------------------------------------------------
+
+        if noise_enabled:
+
+            rng = np.random.default_rng(seed)
+
+            (
+                u_noisy,
+                noise,
+                signal_power,
+                noise_power_target
+            ) = add_awgn(
+                signal=u_clean,
+                snr_db=snr_db,
+                rng=rng,
+                power_mask=power_mask
+            )
+
+        else:
+
+            u_noisy = u_clean.copy()
+
+            noise = np.zeros_like(u_clean)
+
+            signal_power = np.mean(
+                u_clean[power_mask]**2
+            )
+
+            noise_power_target = 0.0
+
+        return {
+            "t": t_input,
+            "clean": u_clean,
+            "noisy": u_noisy,
+            "noise": noise,
+            "signal_power": signal_power,
+            "noise_power_target": noise_power_target,
+            "power_mask": power_mask
+        }'''
