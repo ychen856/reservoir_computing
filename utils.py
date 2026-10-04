@@ -204,3 +204,38 @@ def project_reservoir_features_pca(X):
 
     return X_pca, pca, explained
 
+
+
+
+def normalize_bits(bits, M):
+    n_bits = int(np.log2(M))
+
+    # e.g. 10 -> "0010" for 16-QAM
+    s = str(bits).strip()
+
+    # in case pandas reads it as 10.0
+    if "." in s:
+        s = str(int(float(s)))
+
+    return s.zfill(n_bits)
+
+
+def calculate_ber(y_true, y_pred, class_to_bits):
+    bit_errors = 0
+    total_bits = 0
+
+    for yt, yp in zip(y_true, y_pred):
+        true_bits = class_to_bits[int(yt)]
+        pred_bits = class_to_bits[int(yp)]
+
+        bit_errors += sum(
+            bt != bp for bt, bp in zip(true_bits, pred_bits)
+        )
+
+        total_bits += len(true_bits)
+
+    ber = bit_errors / total_bits
+
+    return ber, bit_errors, total_bits
+
+

@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 from reservoir_tank import reservoir_tank
 from input_wave import input_wave
+from utils import build_mpsk_feature_matrix, build_repeated_noise_dataset, centroid_distance_matrix, compute_class_statistics, pairwise_feature_distances
 
 reservoir_tank = reservoir_tank()
 # ============================================================
@@ -129,14 +130,93 @@ phases_16psk = get_mpsk_phases(16)
 phases_32psk = get_mpsk_phases(32)
 
 
-def simulate_mpsk(reservoir_tank, M, t_center, t_eval, t_end, sigma, Iin_peak, fc, eta=1.0, alpha=0.0):
+def simulate_mpsk(
+    M,
+    t_center,
+    t_eval,
+    t_end,
+    sigma,
+    Iin_peak,
+    fc,
+    eta,
+    alpha=0.0,
+    add_noise=False,
+    snr_db=20.0,
+    seed=42
+):
 
     phases = get_mpsk_phases(M)
-    solutions = []
+
+    sols = []
+    clean_inputs = []
+    actual_inputs = []
+
+    rng = np.random.default_rng(seed)
 
     for phase in phases:
-        def input_func(t, phase=phase):
-            return phase_modulated_pulse(t, t_center, sigma, Iin_peak, fc, phase)
+
+        # ====================================================
+        # 1. Generate clean M-PSK waveform
+        # ====================================================
+
+        u_clean = phase_modulated_pulse(
+            t=t_eval,
+            center=t_center,
+            sigma=sigma,
+            I_peak=Iin_peak,
+            fc=fc,
+            phase=phase
+        )
+
+        # ====================================================
+        # 2. Optional AWGN
+        # ====================================================
+
+        if add_noise:
+
+            mask_signal = (
+                np.abs(t_eval - t_center)
+                <= 3.0 * sigma
+            )
+
+            P_signal = np.mean(
+                u_clean[mask_signal]**2
+            )
+
+            P_noise = (
+                P_signal /
+                (10.0**(snr_db / 10.0))
+            )
+
+            noise = rng.normal(
+                loc=0.0,
+                scale=np.sqrt(P_noise),
+                size=len(t_eval)
+            )
+
+            u_input = u_clean + noise
+
+        else:
+
+            u_input = u_clean.copy()
+
+        # ====================================================
+        # 3. Fixed waveform -> function for solve_ivp
+        # ====================================================
+
+        def input_func(t, u=u_input):
+
+            return np.interp(
+                t,
+                t_eval,
+                u,
+                left=0.0,
+                right=0.0
+            )
+
+        # ====================================================
+        # 4. Reservoir
+        # ====================================================
 
         if alpha == 0.0:
             sol = simulate_history(
@@ -145,20 +225,146 @@ def simulate_mpsk(reservoir_tank, M, t_center, t_eval, t_end, sigma, Iin_peak, f
                 eta=eta,
                 input_func=input_func
             )
+
         else:
+
             sol = simulate_nonlinear(
                 eta=eta,
                 input_func=input_func,
                 alpha=alpha,
-                t_span=(0.0, t_end),
+                t_span=(t_eval[0], t_eval[-1]),
                 t_eval=t_eval
-
             )
 
-        solutions.append(sol)
+        sols.append(sol)
 
-    return phases, solutions
+        # Keep inputs for plotting/debug
+        clean_inputs.append(u_clean)
+        actual_inputs.append(u_input)
 
+    return (
+        phases,
+        sols,
+        clean_inputs,
+        actual_inputs
+    )
+
+
+def simulate_mpsk_repeated_noise(
+    M,
+    t_center,
+    t_eval,
+    t_end,
+    sigma,
+    Iin_peak,
+    fc,
+    eta,
+    n_repeat,
+    alpha=0.0,
+    add_noise=False,
+    snr_db=20.0,
+    seed=42
+):
+    """
+    Generate repeated independent AWGN realizations
+    for every M-PSK phase.
+
+    Returns
+    -------
+    phases : shape (M,)
+    sols_by_class : list of lists
+        sols_by_class[m][r]
+        = reservoir solution for phase m, repeat r
+    """
+
+    phases = get_mpsk_phases(M)
+
+    rng = np.random.default_rng(seed)
+
+    sols_by_class = []
+
+    # Same SNR measurement window as before
+    mask_signal = (
+        np.abs(t_eval - t_center)
+        <= 3.0 * sigma
+    )
+
+    for m, phase in enumerate(phases):
+
+        class_sols = []
+
+        # Clean waveform for this phase
+        u_clean = phase_modulated_pulse(
+            t=t_eval,
+            center=t_center,
+            sigma=sigma,
+            I_peak=Iin_peak,
+            fc=fc,
+            phase=phase
+        )
+
+        P_signal = np.mean(
+            u_clean[mask_signal]**2
+        )
+
+        P_noise = (
+            P_signal /
+            (10.0 ** (snr_db / 10.0))
+        )
+
+        noise_std = np.sqrt(P_noise)
+
+        for r in range(n_repeat):
+
+            # Independent noise realization
+            noise = rng.normal(
+                loc=0.0,
+                scale=noise_std,
+                size=len(t_eval)
+            )
+
+            u_noisy = u_clean + noise
+
+            # Fixed noisy waveform -> continuous callable
+            def input_func(t, u=u_noisy):
+                return np.interp(
+                    t,
+                    t_eval,
+                    u,
+                    left=0.0,
+                    right=0.0
+                )
+
+            if alpha == 0.0:
+
+                sol = simulate_history(
+                    t_end=t_end,
+                    t_eval=t_eval,
+                    eta=eta,
+                    input_func=input_func
+                )
+
+            else:
+
+                sol = simulate_nonlinear(
+                    eta=eta,
+                    input_func=input_func,
+                    alpha=alpha,
+                    t_span=(t_eval[0], t_eval[-1]),
+                    t_eval=t_eval
+                )
+
+            class_sols.append(sol)
+
+        sols_by_class.append(class_sols)
+
+        print(
+            f"M={M}: completed phase "
+            f"{m+1}/{M}, "
+            f"phi={phase/np.pi:.3f} pi"
+        )
+
+    return phases, sols_by_class
 
 # ============================================================
 # Step 2A — BPSK through linear PT-RLC reservoir
@@ -260,9 +466,6 @@ def simulate_nonlinear(
 
 
 
-
-
-
 def main():
     # BPSK input verification: generate two phase-modulated Gaussian pulses and check that they are out of phase by pi radians.
     # ============================================================
@@ -319,19 +522,39 @@ def main():
         t_end + dt,
         dt
     )
+    t_input = t_eval.copy()
 
 
     print(f"dt = {dt*1e9:.4f} ns")
     print(f"Sampling rate = {1/dt/1e9:.3f} GHz")
     print(f"Number of time points = {len(t_eval)}")
 
+
+    # ============================================================
+    # Temporal sampling configuration
+    # ============================================================
+
+    T_obs = 0.7e-6
+
+    t_sample_start = t_center
+    t_sample_end = t_center + T_obs
+
+    K_list = [1, 2, 4, 8, 16, 32]
+
+    # ============================================================
+    # noise configuration
+    # ============================================================
+    noise_enabled = False
+    snr_db = 20.0
+    noise_seed = 42
+
+
     # ============================================================
     # 5. Generate MPSK waveforms
     # ============================================================
-    M = 32
+    M = 2
     eta = 1.0
-    phases, sols = simulate_mpsk(
-        reservoir_tank,
+    phases, sols, clean_input, actual_input = simulate_mpsk(
         M=M,
         t_center=t_center,
         t_eval=t_eval,
@@ -341,7 +564,11 @@ def main():
         fc=fc,
         eta=eta,
         alpha=0.0,
+        add_noise=noise_enabled,
+        snr_db=snr_db,
+        seed=noise_seed
     )
+    
 
     mod_name = {
         2: "BPSK",
@@ -350,6 +577,35 @@ def main():
         16: "16-PSK",
         32: "32-PSK"
     }.get(M, f"{M}-PSK")
+
+
+
+    # ============================================================
+    # sampling check
+    # ============================================================
+
+    for K in K_list:
+
+        sample_times, X = build_mpsk_feature_matrix(
+            sols=sols,
+            K=K,
+            t_start=t_sample_start,
+            t_end=t_sample_end
+        )
+
+        D = pairwise_feature_distances(X)
+
+        np.fill_diagonal(D, np.nan)
+
+        min_dist = np.nanmin(D)
+        mean_dist = np.nanmean(D)
+
+        print(
+            f"K={K:2d} | "
+            f"dim={2*K:2d} | "
+            f"min distance={min_dist:.6e} | "
+            f"mean distance={mean_dist:.6e}"
+        )
 
 
     # ============================================================
@@ -472,6 +728,86 @@ def main():
     plt.tight_layout()
     plt.show()
 
+
+    # print AWGN noise details
+    # ============================================================
+    # AWGN sanity check
+    # ============================================================
+    if noise_enabled:
+
+        # Check one M-PSK symbol, e.g. phi = 0
+        k_check = 0
+
+        u_clean = clean_input[k_check]
+        u_noisy = actual_input[k_check]
+
+        # Recover the actual noise realization
+        noise = u_noisy - u_clean
+
+        # Use the same signal region used for SNR definition
+        power_mask = (
+            np.abs(t_eval - t_center)
+            <= 3.0 * sigma
+        )
+
+        # Measured signal/noise power
+        Ps_measured = np.mean(
+            u_clean[power_mask]**2
+        )
+
+        Pn_measured = np.mean(
+            noise[power_mask]**2
+        )
+
+        snr_measured_db = 10.0 * np.log10(
+            Ps_measured / Pn_measured
+        )
+
+        print("\n=== AWGN sanity check ===")
+
+        print(
+            f"M = {M}"
+        )
+
+        print(
+            f"Checked phase = "
+            f"{phases[k_check] / np.pi:.3f} pi"
+        )
+
+        print(
+            f"Requested SNR = "
+            f"{snr_db:.2f} dB"
+        )
+
+        print(
+            f"Measured signal power = "
+            f"{Ps_measured:.6e} A^2"
+        )
+
+        print(
+            f"Measured noise power = "
+            f"{Pn_measured:.6e} A^2"
+        )
+
+        print(
+            f"Measured SNR = "
+            f"{snr_measured_db:.2f} dB"
+        )
+
+        print(
+            f"Noise std = "
+            f"{np.std(noise[power_mask]):.6e} A"
+        )
+
+        print(
+            f"Clean max |u| = "
+            f"{np.max(np.abs(u_clean)):.6e} A"
+        )
+
+        print(
+            f"Noisy max |u| = "
+            f"{np.max(np.abs(u_noisy)):.6e} A"
+        )
 
 
 
