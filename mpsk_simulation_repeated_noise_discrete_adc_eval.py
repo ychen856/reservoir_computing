@@ -1,6 +1,9 @@
+from linear_readout import predict_linear_readout, train_linear_readout
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
+from sklearn.decomposition import PCA
+from sklearn.metrics import confusion_matrix
 from reservoir_tank import reservoir_tank
 from input_wave import input_wave
 from utils import build_mpsk_feature_matrix, build_repeated_noise_dataset, centroid_distance_matrix, compute_class_statistics, pairwise_feature_distances, project_reservoir_features_pca
@@ -263,7 +266,10 @@ def simulate_mpsk_repeated_noise(
     alpha=0.0,
     add_noise=False,
     snr_db=20.0,
-    seed=42
+    seed=42,
+    adc_enabled=False,
+    fs_adc=None,
+    adc_bits=None
 ):
     """
     Simulate repeated M-PSK inputs through the reservoir.
@@ -285,6 +291,37 @@ def simulate_mpsk_repeated_noise(
         sols_by_class[m][r] is the reservoir solution
         for phase m and realization r.
     """
+
+    # for adc
+    rng = np.random.default_rng(seed)
+
+    sols_by_class = []
+
+    # ========================================================
+    # ADC sampling grid
+    # ========================================================
+
+    if adc_enabled:
+
+        if fs_adc is None:
+            raise ValueError(
+                "fs_adc must be specified when adc_enabled=True"
+            )
+
+        dt_adc = 1.0 / fs_adc
+
+        t_adc = np.arange(
+            t_eval[0],
+            t_eval[-1] + dt_adc,
+            dt_adc
+        )
+
+    else:
+
+        dt_adc = None
+        t_adc = None
+
+    
 
     # ========================================================
     # M-PSK constellation phases
@@ -369,7 +406,6 @@ def simulate_mpsk_repeated_noise(
             # ------------------------------------------------
             # Fixed waveform -> callable input function
             # ------------------------------------------------
-
             def input_func(t, u=u_input):
 
                 return np.interp(
@@ -379,6 +415,110 @@ def simulate_mpsk_repeated_noise(
                     left=0.0,
                     right=0.0
                 )
+
+            if adc_enabled:
+                # --------------------------------------------
+                # ADC sampling
+                # --------------------------------------------
+
+                u_adc = input_func(t_adc)
+
+                # --------------------------------------------
+                # Optional ADC quantization
+                # --------------------------------------------
+
+                if adc_bits is not None:
+
+                    adc_full_scale = 1.2 * Iin_peak
+
+                    levels = 2 ** adc_bits
+
+                    u_adc_clip = np.clip(
+                        u_adc,
+                        -adc_full_scale,
+                        adc_full_scale
+                    )
+
+                    delta = (
+                        2.0 * adc_full_scale
+                        / (levels - 1)
+                    )
+
+                    u_adc_used = (
+                        np.round(
+                            (u_adc_clip + adc_full_scale)
+                            / delta
+                        )
+                        * delta
+                        - adc_full_scale
+                    )
+
+                else:
+                    u_adc_used = u_adc
+
+
+                # --------------------------------------------
+                # Zero-order hold reconstruction
+                # --------------------------------------------
+
+                def input_func(
+                    t,
+                    t_adc=t_adc,
+                    u_adc_used=u_adc_used,
+                    dt_adc=dt_adc
+                ):
+
+                    if t < t_adc[0] or t > t_adc[-1]:
+                        return 0.0
+
+                    idx = int(
+                        np.floor(
+                            (t - t_adc[0]) / dt_adc
+                        )
+                    )
+
+                    idx = np.clip(
+                        idx,
+                        0,
+                        len(u_adc_used) - 1
+                    )
+
+                    
+
+                    return u_adc_used[idx]
+
+                # ------------------------------------------------------------
+                # ADC sanity-check plot
+                # Only plot the first phase / first noise realization
+                # ------------------------------------------------------------
+                                    
+                if (
+                    adc_enabled
+                    and m == 0
+                    and r == 0
+                ):
+                    print("\n=== ADC sanity check ===")
+                    print(f"Carrier frequency = {fc/1e6:.3f} MHz")
+                    print(f"ADC sampling rate = {fs_adc/1e6:.3f} MS/s")
+                    print(f"ADC samples/cycle = {fs_adc/fc:.3f}")
+                    print(f"ADC sample interval = {dt_adc*1e9:.3f} ns")
+                
+                    if adc_bits is None:
+                        print("ADC quantization = OFF")
+                    else:
+                        print(f"ADC resolution = {adc_bits} bits")
+                    '''plot_adc_sanity_check(
+                        t_eval=t_eval,
+                        u_input=u_input,
+                        t_adc=t_adc,
+                        u_adc_used=u_adc_used,
+                        input_func=input_func,
+                        t_center=t_center,
+                        fc=fc,
+                        adc_bits=adc_bits
+                    )'''
+
+
 
             # ------------------------------------------------
             # Reservoir simulation
@@ -584,7 +724,125 @@ def plot_pca_clusters(
         f"Total 2D explained variance = "
         f"{np.sum(explained)*100:.3f}%"
     )
+
+
+def adc_zoh_input(t, t_start, dt_adc, u_adc_quant):
+    idx = np.floor(
+        (t - t_start) / dt_adc
+    ).astype(int)
+
+    idx = np.clip(
+        idx,
+        0,
+        len(u_adc_quant) - 1
+    )
+
+    return u_adc_quant[idx]    
     
+
+def plot_adc_sanity_check(
+    t_eval,
+    u_input,
+    t_adc,
+    u_adc_used,
+    input_func,
+    t_center,
+    fc,
+    adc_bits=None
+):
+    """
+    Compare:
+      1. numerical analog input waveform
+      2. ADC sample values
+      3. ZOH waveform actually seen by the reservoir
+    """
+
+    # ------------------------------------------------------------
+    # Plot only a short window around the pulse center
+    # ------------------------------------------------------------
+    Tc = 1.0 / fc
+
+    # +/- 4 carrier cycles around pulse center
+    t_left = t_center - 4.0 * Tc
+    t_right = t_center + 4.0 * Tc
+
+    mask = (
+        (t_eval >= t_left)
+        & (t_eval <= t_right)
+    )
+
+    t_plot = t_eval[mask]
+
+    # Original numerical/analog waveform
+    u_analog_plot = u_input[mask]
+
+    # Evaluate the actual ZOH input seen by reservoir
+    u_zoh_plot = np.array([
+        input_func(t)
+        for t in t_plot
+    ])
+
+    # ADC samples within plotting window
+    mask_adc = (
+        (t_adc >= t_left)
+        & (t_adc <= t_right)
+    )
+
+    t_adc_plot = t_adc[mask_adc]
+    u_adc_plot = u_adc_used[mask_adc]
+
+
+    # ------------------------------------------------------------
+    # Plot
+    # ------------------------------------------------------------
+    plt.figure(figsize=(11, 5))
+
+    plt.plot(
+        (t_plot - t_center) * 1e9,
+        u_analog_plot * 1e3,
+        linewidth=1.8,
+        label="Analog input"
+    )
+
+    plt.step(
+        (t_plot - t_center) * 1e9,
+        u_zoh_plot * 1e3,
+        where="post",
+        linewidth=1.5,
+        label="ADC + ZOH input"
+    )
+
+    plt.scatter(
+        (t_adc_plot - t_center) * 1e9,
+        u_adc_plot * 1e3,
+        s=35,
+        zorder=5,
+        label="ADC samples"
+    )
+
+    plt.axvline(
+        0.0,
+        linestyle="--",
+        linewidth=1.0
+    )
+
+    plt.xlabel("Time relative to pulse center (ns)")
+    plt.ylabel("Input current (mA)")
+
+    if adc_bits is None:
+        adc_text = "sampling + ZOH"
+    else:
+        adc_text = f"{adc_bits}-bit ADC + ZOH"
+
+    plt.title(
+        f"Input ADC sanity check: {adc_text}"
+    )
+
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
 
 def main():
     # BPSK input verification: generate two phase-modulated Gaussian pulses and check that they are out of phase by pi radians.
@@ -608,7 +866,7 @@ def main():
     # 2. Pulse duration
     # ============================================================
 
-    N_cycles = 40
+    N_cycles = 8
 
     pulse_duration = N_cycles * Tc
 
@@ -630,7 +888,7 @@ def main():
     # 5. Time grid
     # ============================================================
 
-    samples_per_cycle = 8
+    samples_per_cycle = 40
 
     dt = Tc / samples_per_cycle
 
@@ -648,6 +906,28 @@ def main():
     print(f"dt = {dt*1e9:.4f} ns")
     print(f"Sampling rate = {1/dt/1e9:.3f} GHz")
     print(f"Number of time points = {len(t_eval)}")
+
+    
+    # ============================================================
+    # ADC configuration
+    # ============================================================
+
+    adc_enabled = True
+
+    #fs_adc = 480e6          # ADC sampling rate [Hz]
+    fs_adc = 48.0e6*4
+    adc_bits = 3        # None = sampling + ZOH only
+                        # later: 8, 10, 12, ...
+
+    print("\n=== Input ADC configuration ===")
+    print(f"ADC enabled = {adc_enabled}")
+    print(f"ADC sampling rate = {fs_adc/1e6:.1f} MS/s")
+    print(f"ADC samples/cycle = {fs_adc/fc:.2f}")
+
+    if adc_bits is None:
+        print("ADC quantization = disabled")
+    else:
+        print(f"ADC resolution = {adc_bits} bits")
 
 
     # ============================================================
@@ -674,10 +954,10 @@ def main():
     # ============================================================
     M = 4
     eta = 1.0
-    N_REPEAT = 20
+    N_REPEAT = 500
 
 
-    phases, sols = simulate_mpsk_repeated_noise(
+    train_phases, train_sols = simulate_mpsk_repeated_noise(
         M,
         t_center,
         t_eval,
@@ -690,8 +970,30 @@ def main():
         alpha=0.0,
         add_noise=noise_enabled,
         snr_db=snr_db,
-        seed=noise_seed
+        seed=noise_seed,
+        adc_enabled=adc_enabled,
+        fs_adc=fs_adc,
+        adc_bits=adc_bits
     )
+    test_phases, test_sols = simulate_mpsk_repeated_noise(
+        M,
+        t_center,
+        t_eval,
+        t_end,
+        sigma,
+        Iin_peak,
+        fc,
+        eta,
+        n_repeat=200,
+        alpha=0.0,
+        add_noise=noise_enabled,
+        snr_db=snr_db,
+        seed=noise_seed,
+        adc_enabled=adc_enabled,
+        fs_adc=fs_adc,
+        adc_bits=adc_bits
+    )
+    
 
     mod_name = {
         2: "BPSK",
@@ -701,7 +1003,7 @@ def main():
         32: "32-PSK"
     }.get(M, f"{M}-PSK")
 
-
+    
 
     # ============================================================
     # sampling check
@@ -710,99 +1012,99 @@ def main():
     print("\n=== Repeated-noise temporal sampling sweep ===")
 
     for K in K_list:
-
+        print('k: ', K)
         # --------------------------------------------------------
         # Build sampled reservoir feature dataset
         # --------------------------------------------------------
-        sample_times, X, y = build_repeated_noise_dataset(
-            sols_by_class=sols,
+        sample_times, x_train, y_train = build_repeated_noise_dataset(
+            sols_by_class=train_sols,
+            K=K,
+            t_start=t_sample_start,
+            t_end=t_sample_end
+        )
+        sample_times, x_test, y_test = build_repeated_noise_dataset(
+            sols_by_class=test_sols,
             K=K,
             t_start=t_sample_start,
             t_end=t_sample_end
         )
 
-        # --------------------------------------------------------
-        # Class centroids and intra-class spread
-        # --------------------------------------------------------
-        centroids, spreads = compute_class_statistics(
-            X=X,
-            y=y,
-            M=M
-        )
-
-        # --------------------------------------------------------
-        # Inter-class centroid distances
-        # --------------------------------------------------------
-        D = centroid_distance_matrix(
-            centroids
-        )
-
-        # IMPORTANT:
-        # Ignore self-distance D_ii = 0
-        D_no_diag = D.copy()
-        np.fill_diagonal(D_no_diag, np.nan)
-
-        D_min = np.nanmin(D_no_diag)
-
-        # --------------------------------------------------------
-        # Mean intra-class spread
-        # --------------------------------------------------------
-        S_mean = np.mean(spreads)
-
-        # --------------------------------------------------------
-        # Separation-to-spread ratio
-        # --------------------------------------------------------
-        ratio = D_min / S_mean
-
-        print(
-            f"K={K:2d} | "
-            f"dim={2*K:2d} | "
-            f"Dmin={D_min:.6e} | "
-            f"spread={S_mean:.6e} | "
-            f"ratio={ratio:.4f}"
-        )
 
 
-    '''M = 4
-    K = 8
+        mu = x_train.mean(axis=0)
+        std = x_train.std(axis=0)
+        std = np.where(std < 1e-12, 1.0, std)
 
-    sample_times, X, y = build_repeated_noise_dataset(
-        sols_by_class=sols,
-        K=K,
-        t_start=t_sample_start,
-        t_end=t_sample_end
-    )
+        x_train_n = (x_train - mu) / std
+        x_test_n  = (x_test  - mu) / std
 
-    plot_pca_clusters(
-        X=X,
-        y=y,
-        phases=phases,
-        M=M,
-        K=K,
-        snr_db=snr_db
-    )'''
+        pca = PCA(n_components=2)
+        X_train_pca = pca.fit_transform(x_train_n)
+        X_test_pca  = pca.transform(x_test_n)
+        plt.figure(figsize=(8, 7))
 
+        for c in np.unique(y_train):
+            idx_tr = (y_train == c)
+            idx_te = (y_test == c)
 
-    K_plot_list = [1, 2, 4, 8]
-    for K in K_plot_list:
+            plt.scatter(
+                X_train_pca[idx_tr, 0],
+                X_train_pca[idx_tr, 1],
+                alpha=0.35,
+                s=25,
+                label=f"class {c} train"
+            )
 
-        sample_times, X, y = build_repeated_noise_dataset(
-            sols_by_class=sols,
-            K=K,
-            t_start=t_sample_start,
-            t_end=t_sample_end
-        )
+            plt.scatter(
+                X_test_pca[idx_te, 0],
+                X_test_pca[idx_te, 1],
+                marker="x",
+                s=35,
+                label=f"class {c} test"
+            )
 
-        plot_pca_clusters(
-            X=X,
-            y=y,
-            phases=phases,
-            M=M,
-            K=K,
-            snr_db=snr_db
-        )
+        plt.xlabel(f"PC1 ({100*pca.explained_variance_ratio_[0]:.1f}% variance)")
+        plt.ylabel(f"PC2 ({100*pca.explained_variance_ratio_[1]:.1f}% variance)")
+        plt.title(f"Train/Test PCA, K={K}")
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
         
+            
+        
+        mu = x_train.mean(axis=0)
+        std = x_train.std(axis=0)
+        print("X_train shape:", x_train.shape)
+        print("mu shape:", mu.shape)
+        print("std shape:", std.shape)
+        print("std:", std)
+        std[std < 1e-12] = 1.0
+        
+    
+        Wout = train_linear_readout(
+            x_train_n,
+            y_train,
+            n_classes=4,
+            ridge=1e-6
+        )
 
+        x_pred, x_scores = predict_linear_readout(
+            x_train_n,
+            Wout
+        )
+        y_pred, y_scores = predict_linear_readout(
+            x_test_n,
+            Wout
+        )
+        print(f"Train accuracy = {np.mean(x_pred == y_train)*100:.2f}%")
+        print(f"Test accuracy  = {np.mean(y_pred == y_test)*100:.2f}%")
+
+        print(confusion_matrix(y_test, y_pred))
+        
+        acc = np.mean(y_pred == y_test)
+        
+        print(f"Test accuracy = {100*acc:.2f}%")
 
 if __name__=="__main__":
     main()
