@@ -55,32 +55,9 @@ def get_mpsk_phases(M):
     return 2.0 * np.pi * np.arange(M) / M
 
 
-def simulate_history(reservoir_tank, t_end, t_eval, eta, input_func):
-    """
-    Simulate the same PT-RLC reservoir with an arbitrary input history.
-    """
-
-    x0 = np.zeros(4)
-
-    sol = solve_ivp(
-        lambda t, x: reservoir_tank.rhs_history(
-            t,
-            x,
-            eta,
-            reservoir_tank.G0,
-            input_func
-        ),
-        (0.0, t_end),
-        x0,
-        t_eval=t_eval,
-        rtol=1e-9,
-        atol=1e-12
-    )
-
-    return sol
-
 
 def simulate_mpsk(
+    pt_reservoir,
     M,
     t_center,
     t_eval,
@@ -169,7 +146,7 @@ def simulate_mpsk(
         # ====================================================
 
         if alpha == 0.0:
-            sol = simulate_history(
+            sol = pt_reservoir.simulate_history(
                 t_end=t_end,
                 t_eval=t_eval,
                 eta=eta,
@@ -178,7 +155,7 @@ def simulate_mpsk(
 
         else:
 
-            sol = simulate_nonlinear(
+            sol = pt_reservoir.simulate_nonlinear(
                 eta=eta,
                 input_func=input_func,
                 alpha=alpha,
@@ -200,72 +177,3 @@ def simulate_mpsk(
     )
 
 
-def simulate_nonlinear(
-    reservoir_tank,
-    eta,
-    input_func,
-    alpha,
-    t_span,
-    t_eval,
-    x0=None
-):
-    if x0 is None:
-        x0 = np.zeros(4)
-
-    sol = solve_ivp(
-        lambda t, x: reservoir_tank.nonlinear_rhs(
-            t,
-            x,
-            eta,
-            alpha,
-            input_func
-        ),
-        t_span,
-        x0,
-        t_eval=t_eval,
-        rtol=1e-8,
-        atol=1e-11
-    )
-
-    return sol
-
-def simulate_reservoir_linear(
-    reservoir_tank,
-    eta,
-    input_func,
-    t_span,
-    t_eval,
-    x0=None
-):
-    """
-    State:
-        x = [V1, V2, IL1, IL2]
-
-    Readout later uses only:
-        r = [V1, V2]
-    """
-
-    if x0 is None:
-        x0 = np.zeros(4)
-
-    A = reservoir_tank.build_state_matrix(eta)
-    B = reservoir_tank.build_input_vector()
-
-    def rhs(t, x):
-        u = input_func(t)
-        return A @ x + B * u
-
-    sol = solve_ivp(
-        rhs,
-        t_span,
-        x0,
-        t_eval=t_eval,
-        method="DOP853",
-        rtol=1e-9,
-        atol=1e-12
-    )
-
-    if not sol.success:
-        raise RuntimeError(sol.message)
-
-    return sol

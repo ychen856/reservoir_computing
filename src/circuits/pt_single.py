@@ -1,4 +1,6 @@
 import numpy as np
+from scipy.integrate import solve_ivp
+from src.tasks import get_mpsk_phases, phase_modulated_pulse
 
 class pt_reservoir_tank:
     def __init__(self):
@@ -163,4 +165,126 @@ class pt_reservoir_tank:
             dIL2
         ])
 
+class PTSingleReservoir:
+    def __init__(self, eta=1.0, alpha=0.0):
+        self.tank = pt_reservoir_tank()
+        self.eta = eta
+        self.alpha = alpha
+
+    def simulate_nonlinear(
+        self,
+        input_func,
+        t_span,
+        t_eval,
+        x0=None
+    ):
+        if x0 is None:
+            x0 = np.zeros(4)
+
+        sol = solve_ivp(
+            lambda t, x: self.tank.nonlinear_rhs(
+                t,
+                x,
+                self.eta,
+                self.alpha,
+                input_func
+            ),
+            t_span,
+            x0,
+            t_eval=t_eval,
+            rtol=1e-8,
+            atol=1e-11
+        )
+
+        return sol
+
+
+    '''def simulate_history(self, t_end, t_eval, input_func):
+        """
+        Simulate the same PT-RLC reservoir with an arbitrary input history.
+        """
+
+        x0 = np.zeros(4)
+
+        sol = solve_ivp(
+            lambda t, x: self.tank.rhs_history(
+                t,
+                x,
+                self.eta,
+                self.tank.G0,
+                input_func
+            ),
+            (0.0, t_end),
+            x0,
+            t_eval=t_eval,
+            rtol=1e-9,
+            atol=1e-12
+        )
+
+        return sol'''
+
+
+    def simulate_linear(
+        self,
+        eta,
+        input_func,
+        t_span,
+        t_eval,
+        x0=None
+    ):
+        """
+        State:
+            x = [V1, V2, IL1, IL2]
+
+        Readout later uses only:
+            r = [V1, V2]
+        """
+
+        if x0 is None:
+            x0 = np.zeros(4)
+
+        A = self.tank.build_state_matrix(eta)
+        B = self.tank.build_input_vector()
+
+        def rhs(t, x):
+            u = input_func(t)
+            return A @ x + B * u
+
+        sol = solve_ivp(
+            rhs,
+            t_span,
+            x0,
+            t_eval=t_eval,
+            method="DOP853",
+            rtol=1e-9,
+            atol=1e-12
+        )
+
+        if not sol.success:
+            raise RuntimeError(sol.message)
+
+        return sol
+
+
     
+    def simulate(
+        self,
+        input_func,
+        t_span,
+        t_eval,
+        x0=None
+    ):
+        if self.alpha == 0.0:
+            return self.simulate_linear(
+                input_func=input_func,
+                t_span=t_span,
+                t_eval=t_eval,
+                x0=x0
+            )
+
+        return self.simulate_nonlinear(
+            input_func=input_func,
+            t_span=t_span,
+            t_eval=t_eval,
+            x0=x0
+        )
