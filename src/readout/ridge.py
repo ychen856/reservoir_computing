@@ -46,3 +46,43 @@ def predict_linear_readout(X, Wout):
 
     return y_pred, scores
 
+
+
+def train_ridge_regression(X, y, ridge=1e-6):
+    X_aug = np.column_stack([
+        np.ones(X.shape[0]),
+        X
+    ])
+
+    reg = np.eye(X_aug.shape[1])
+    reg[0, 0] = 0.0
+
+    W = np.linalg.solve(
+        X_aug.T @ X_aug + ridge * reg,
+        X_aug.T @ y
+    )
+
+    return W
+
+
+def predict_ridge_regression(X, W):
+    X_aug = np.column_stack([
+        np.ones(X.shape[0]),
+        X
+    ])
+
+    return X_aug @ W
+
+
+
+
+def nrmse(y_true, y_pred):
+
+    mse = np.mean(
+        (y_true - y_pred)**2
+    )
+
+    return np.sqrt(
+        mse / np.var(y_true)
+    )
+

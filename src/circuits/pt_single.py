@@ -1,6 +1,5 @@
 import numpy as np
 from scipy.integrate import solve_ivp
-from src.tasks import get_mpsk_phases, phase_modulated_pulse
 
 class pt_reservoir_tank:
     def __init__(self):
@@ -110,14 +109,14 @@ class pt_reservoir_tank:
 
         return G_eff
 
-    def rhs_history(self, t, x, eta, G0, input_func):
+    def rhs_history(self, t, x, input_func):
         """
         Driven PT-RLC dynamics.
         x = [V1, V2, IL1, IL2]
         """
 
         # Same A matrix as Stage 1B
-        A = self.build_state_matrix(eta)
+        A = self.build_state_matrix()
 
         # Natural dynamics
         dx = A @ x
@@ -211,7 +210,6 @@ class PTSingleReservoir:
                 t,
                 x,
                 self.eta,
-                self.tank.G0,
                 input_func
             ),
             (0.0, t_end),
@@ -226,7 +224,6 @@ class PTSingleReservoir:
 
     def simulate_linear(
         self,
-        eta,
         input_func,
         t_span,
         t_eval,
@@ -243,7 +240,7 @@ class PTSingleReservoir:
         if x0 is None:
             x0 = np.zeros(4)
 
-        A = self.tank.build_state_matrix(eta)
+        A = self.tank.build_state_matrix(self.eta)
         B = self.tank.build_input_vector()
 
         def rhs(t, x):

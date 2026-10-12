@@ -4,15 +4,14 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.metrics import confusion_matrix
 
-from src.circuits.pt_single import pt_reservoir_tank
-from src.tasks.mpsk import si
+from src.circuits.pt_single import PTSingleReservoir
+from src.tasks.mpsk import simulate_mpsk_repeated_noise
 from src.readout.ridge import train_linear_readout, predict_linear_readout
 from src.utils.utils import build_repeated_noise_dataset
 
 
 
 
-reservoir_tank = pt_reservoir_tank()
 def main():
     # BPSK input verification: generate two phase-modulated Gaussian pulses and check that they are out of phase by pi radians.
     # ============================================================
@@ -126,8 +125,10 @@ def main():
     N_REPEAT = 500
 
 
+    pt_reservoir = PTSingleReservoir()
+
     train_phases, train_sols = simulate_mpsk_repeated_noise(
-        reservoir_tank,
+        pt_reservoir,
         M,
         t_center,
         t_eval,
@@ -135,9 +136,7 @@ def main():
         sigma,
         Iin_peak,
         fc,
-        eta,
         n_repeat=N_REPEAT,
-        alpha=0.0,
         add_noise=noise_enabled,
         snr_db=snr_db,
         seed=noise_seed,
@@ -146,7 +145,7 @@ def main():
         adc_bits=adc_bits
     )
     test_phases, test_sols = simulate_mpsk_repeated_noise(
-        reservoir_tank, 
+        pt_reservoir, 
         M,
         t_center,
         t_eval,
@@ -154,9 +153,7 @@ def main():
         sigma,
         Iin_peak,
         fc,
-        eta,
         n_repeat=200,
-        alpha=0.0,
         add_noise=noise_enabled,
         snr_db=snr_db,
         seed=noise_seed,
