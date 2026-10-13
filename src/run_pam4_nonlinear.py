@@ -1,8 +1,8 @@
 import numpy as np
 
 from src.circuits.pt_single import PTSingleReservoir
-from src.run_narma10 import X_train
-from src.tasks.applications.pam4 import apply_linear_channel, generate_pam4, quantize_pam4_class
+from src.tasks.applications.pam4_nonlinear import generate_pam4_nonlinear_task
+from src.tasks.applications.pam4 import quantize_pam4_class
 from src.utils.encoding import sample_hold_input
 from src.utils.features import extract_temporal_features
 from src.readout.ridge import train_ridge_regression, predict_ridge_regression
@@ -48,17 +48,6 @@ CHANNEL_RADIUS = 2
 # ============================================================
 # Helpers
 # ============================================================
-
-def build_centered_window(sequence, radius=2):
-    """Return centered windows [q[n-r], ..., q[n], ..., q[n+r]]."""
-    sequence = np.asarray(sequence, dtype=float)
-    n_valid = len(sequence) - 2 * radius
-    Xw = np.zeros((n_valid, 2 * radius + 1))
-
-    for i, n in enumerate(range(radius, len(sequence) - radius)):
-        Xw[i] = sequence[n - radius:n + radius + 1]
-
-    return Xw
 
 
 def evaluate_ridge(X_train, X_test, y_train, y_test, ridge=1e-6):
@@ -107,12 +96,33 @@ def print_result(name, feature_dim, result):
 # Generate PAM4 + linear ISI + nonlinear distortion (+ optional AWGN)
 # ============================================================
 
-symbols, y = generate_pam4(
+'''symbols, y = generate_pam4_nonlinear_task(
     n_symbols=N_SYMBOLS,
     seed=SEED,
+)'''
+task_data = generate_pam4_nonlinear_task(
+    n_symbols=N_SYMBOLS,
+    seed=SEED,
+    washout=WASHOUT,
+    train_ratio=TRAIN_RATIO,
+    quadratic=NL_QUAD,
+    cubic=NL_CUBIC,
+    add_awgn=ADD_AWGN,
+    snr_db=SNR_DB,
+    noise_seed=NOISE_SEED,
+    channel_radius=CHANNEL_RADIUS,
 )
 
-q_raw = apply_linear_channel(symbols)
+u = task_data.u
+y = task_data.y
+
+n_symbols = len(u)
+
+u_scale = task_data.metadata["input_scale"]
+measured_snr_db = task_data.metadata["measured_snr_db"]
+channel_radius = task_data.metadata["channel_radius"]
+
+'''q_raw = apply_linear_channel(symbols)
 
 # Nonlinear channel distortion:
 # d[n] = q[n] + 0.036 q[n]^2 - 0.011 q[n]^3
@@ -145,7 +155,7 @@ if ADD_AWGN:
 # Normalize the final received waveform to unit peak before current injection.
 # All baselines use this SAME normalized waveform.
 u_scale = np.max(np.abs(u_raw))
-u = u_raw / u_scale
+u = u_raw / u_scale'''
 
 
 # ============================================================
@@ -164,7 +174,7 @@ input_func = sample_hold_input(
 # ============================================================
 
 dt = T_SYMBOL / POINTS_PER_SYMBOL
-t_end = N_SYMBOLS * T_SYMBOL
+t_end = n_symbols * T_SYMBOL
 
 t_eval = np.arange(0.0, t_end, dt)
 
@@ -197,6 +207,15 @@ sol = reservoir.simulate(
     t_eval=t_eval,
 )
 
+if not sol.success:
+    raise RuntimeError(
+        f"Reservoir simulation failed: {sol.message}"
+    )
+
+if not np.all(np.isfinite(sol.y)):
+    raise RuntimeError(
+        "Reservoir simulation contains NaN or Inf"
+    )
 
 # ============================================================
 # Reservoir feature extraction
@@ -204,7 +223,7 @@ sol = reservoir.simulate(
 
 X = extract_temporal_features(
     sol,
-    n_symbols=N_SYMBOLS,
+    n_symbols=n_symbols,
     symbol_period=T_SYMBOL,
     k=K,
 )
@@ -228,13 +247,14 @@ print("V2 range:", np.min(sol.y[1]), np.max(sol.y[1]))
 # exactly the same labels and chronological train/test split.
 # ============================================================
 
-start = max(WASHOUT, CHANNEL_RADIUS)
-stop = N_SYMBOLS - CHANNEL_RADIUS       # Python-exclusive
+start = max(task_data.washout, channel_radius)
+stop = n_symbols - channel_radius       # Python-exclusive
 indices = np.arange(start, stop)
 
 y_eval = y[indices]
 X_pt = X[indices]
 X_current = u[indices].reshape(-1, 1)
+
 
 # Build [u[n-2], u[n-1], u[n], u[n+1], u[n+2]] directly at the same n.
 X_5tap = np.column_stack([
@@ -245,7 +265,7 @@ X_5tap = np.column_stack([
     u[indices + 2],
 ])
 
-n_train = int(TRAIN_RATIO * len(indices))
+n_train = int(task_data.train_ratio * len(indices))
 
 y_train = y_eval[:n_train]
 y_test = y_eval[n_train:]

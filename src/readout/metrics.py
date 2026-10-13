@@ -16,6 +16,15 @@ def nmse(y_true, y_pred):
 
 
 def pearson_r(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+
+    if np.std(y_true) < 1e-15:
+        return np.nan
+
+    if np.std(y_pred) < 1e-15:
+        return np.nan
+
     return np.corrcoef(y_true, y_pred)[0, 1]
 
 
