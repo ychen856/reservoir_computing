@@ -1,10 +1,70 @@
 import numpy as np
+from sklearn.preprocessing import PolynomialFeatures
 
 from src.circuits.pt_single import PTSingleReservoir
-from src.tasks.narma10 import generate_narma10
-from src.utils.task_encoding import sample_hold_input, carrier_encoded_input
-from src.utils.task_features import extract_temporal_features, normalize_train_test
-from src.readout.ridge import train_ridge_regression, predict_ridge_regression, nrmse
+from src.tasks.benchmarks.narma10 import generate_narma10
+from src.utils.encoding import sample_hold_input, carrier_encoded_input
+from src.utils.features import extract_temporal_features
+from src.readout.ridge import train_ridge_regression, predict_ridge_regression
+from src.readout.metrics import nrmse
+from src.readout.preprocessing import fit_standardizer, transform_standardizer
+
+def evaluate_regression(
+    X,
+    y,
+    train_indices,
+    test_indices,
+    ridge=1e-6,
+):
+    X_train = X[train_indices]
+    X_test = X[test_indices]
+
+    y_train = y[train_indices]
+    y_test = y[test_indices]
+
+    mu, std = fit_standardizer(X_train)
+
+    X_train_n = transform_standardizer(
+        X_train, mu, std
+    )
+
+    X_test_n = transform_standardizer(
+        X_test, mu, std
+    )
+
+    W = train_ridge_regression(
+        X_train_n,
+        y_train,
+        ridge=ridge,
+    )
+
+    y_train_pred = predict_ridge_regression(
+        X_train_n, W
+    )
+
+    y_test_pred = predict_ridge_regression(
+        X_test_n, W
+    )
+
+    return {
+        "train_nrmse": nrmse(y_train, y_train_pred),
+        "test_nrmse": nrmse(y_test, y_test_pred),
+        "W": W,
+    }
+
+def build_input_history_features(u, order=10):
+
+    X = np.zeros((len(u), order))
+
+    for n in range(len(u)):
+        for k in range(order):
+
+            idx = n - k
+
+            if idx >= 0:
+                X[n, k] = u[idx]
+
+    return X
 
 
 # ============================================================
@@ -27,18 +87,26 @@ K = 8
 
 POINTS_PER_SYMBOL = 16
 
-READOUT_DELAY = 1
+READOUT_DELAY = 0
 
 # ============================================================
 # Generate task
 # ============================================================
 
 
-u, y = generate_narma10(
+'''u, y = generate_narma10(
     n_samples=N_SAMPLES,
     seed=42
+)'''
+task_data = generate_narma10(
+    n_samples=N_SAMPLES,
+    washout=200,
+    train_ratio=0.8,
+    seed=42
 )
-
+u = task_data.u
+y = task_data.y
+n_symbols = len(u)
 
 
 # ============================================================
@@ -63,7 +131,7 @@ input_func = sample_hold_input(
 
 dt = T_SYMBOL / POINTS_PER_SYMBOL
 
-t_end = N_SAMPLES * T_SYMBOL
+t_end = n_symbols * T_SYMBOL
 
 t_eval = np.arange(
     0.0,
@@ -101,7 +169,7 @@ sol = reservoir.simulate(
 
 X = extract_temporal_features(
     sol,
-    n_symbols=N_SAMPLES,
+    n_symbols=n_symbols,
     symbol_period=T_SYMBOL,
     k=K,
     delay_symbols=READOUT_DELAY
@@ -133,111 +201,98 @@ print(np.min(sol.y[1]), np.max(sol.y[1]))
 # Washout
 # ============================================================
 
-WASHOUT = 200
+WASHOUT = task_data.washout
 
-X_eval = X[WASHOUT:-1]
-y_eval = y[WASHOUT + 1:]
+valid_indices = np.arange(
+    task_data.washout,
+    len(task_data.u),
+)
 
 
 # ============================================================
 # Sequential train / test split
 # ============================================================
 
-TRAIN_RATIO = 0.8
+TRAIN_RATIO = task_data.train_ratio
 
-n_train = int(TRAIN_RATIO * len(X_eval))
+n_train = int(TRAIN_RATIO * len(valid_indices))
 
-X_train = X_eval[:n_train]
-y_train = y_eval[:n_train]
 
-X_test = X_eval[n_train:]
-y_test = y_eval[n_train:]
+train_indices = valid_indices[:n_train]
+test_indices = valid_indices[n_train:]
 
 
 
-
-# ============================================================
-# Normalize using training set only
-# ============================================================
-
-X_train_n, X_test_n = normalize_train_test(
-    X_train,
-    X_test
+X_hist = build_input_history_features(
+    task_data.u,
+    order=10
 )
 
-'''mu = X_train.mean(axis=0)
-std = X_train.std(axis=0)
-
-std[std < 1e-12] = 1.0
-
-X_train_n = (X_train - mu) / std
-X_test_n = (X_test - mu) / std'''
-
-
-# ============================================================
-# Ridge regression
-# ============================================================
-
-RIDGE = 1e-6
-
-W = train_ridge_regression(
-    X_train_n,
-    y_train,
-    ridge=RIDGE
-)
-
-y_train_pred = predict_ridge_regression(
-    X_train_n,
-    W
-)
-
-y_test_pred = predict_ridge_regression(
-    X_test_n,
-    W
+poly = PolynomialFeatures(
+    degree=2,
+    include_bias=False
 )
 
 
-# ============================================================
-# Evaluation
-# ============================================================
+X_res_poly = poly.fit_transform(X)
+X_hist_poly = poly.fit_transform(X_hist)
 
-train_nrmse = nrmse(
-    y_train,
-    y_train_pred
-)
+results = {
+    "PT reservoir": evaluate_regression(
+        X, y, train_indices, test_indices
+    ),
 
-test_nrmse = nrmse(
-    y_test,
-    y_test_pred
-)
+    "Current input": evaluate_regression(
+        u.reshape(-1, 1),
+        y,
+        train_indices,
+        test_indices,
+    ),
 
-for d in range(11):
+    "10-tap history": evaluate_regression(
+        X_hist,
+        y,
+        train_indices,
+        test_indices,
+    ),
 
-    u_delayed = u[
-        WASHOUT - d:
-        len(u) - d
-    ]
+    "10-tap polynomial": evaluate_regression(
+        X_hist_poly,
+        y,
+        train_indices,
+        test_indices,
+    ),
 
-    X_now = X[WASHOUT:]
+    "PT polynomial": evaluate_regression(
+        X_res_poly,
+        y,
+        train_indices,
+        test_indices,
+    ),
+}
 
-    corr = []
 
-    for j in range(X_now.shape[1]):
-        c = np.corrcoef(
-            X_now[:, j],
-            u_delayed
-        )[0, 1]
-
-        corr.append(abs(c))
-
+for name, result in results.items():
     print(
-        f"delay={d:2d}: "
-        f"max |corr| = {max(corr):.4f}"
+        f"{name:25s} "
+        f"Train={result['train_nrmse']:.6f} "
+        f"Test={result['test_nrmse']:.6f}"
     )
 
 
 
-def memory_curve(X, u, washout, max_delay=20, ridge=1e-6):
+
+
+
+
+
+
+
+
+
+
+
+'''def memory_curve(X, u, washout, max_delay=20, ridge=1e-6):
 
     results = []
 
@@ -248,7 +303,7 @@ def memory_curve(X, u, washout, max_delay=20, ridge=1e-6):
         X_d = X[start:]
         y_d = u[start - d:len(u) - d]
 
-        n_train = int(0.8 * len(X_d))
+        n_train = int(TRAIN_RATIO * len(X_d))
 
         X_train = X_d[:n_train]
         X_test  = X_d[n_train:]
@@ -257,17 +312,10 @@ def memory_curve(X, u, washout, max_delay=20, ridge=1e-6):
         y_test  = y_d[n_train:]
 
         # normalize X using training data
-        X_train_n, X_test_n = normalize_train_test(
-            X_train,
-            X_test
-        )
-        '''mu = X_train.mean(axis=0)
-        std = X_train.std(axis=0)
+        mu, std = fit_standardizer(X_train)
 
-        std[std < 1e-12] = 1.0
-
-        X_train_n = (X_train - mu) / std
-        X_test_n = (X_test - mu) / std'''
+        X_train_n = transform_standardizer(X_train, mu, std)
+        X_test_n = transform_standardizer(X_test, mu, std)
 
         W = train_ridge_regression(
             X_train_n,
@@ -310,233 +358,5 @@ for d, r2 in enumerate(memory_r2):
         f"delay={d:2d}: "
         f"R^2={r2:.4f}"
     )
+'''
 
-
-print("\n=== NARMA-10 benchmark ===")
-print(f"Reservoir     : PT Single")
-print(f"Samples       : {len(y)}")
-print(f"Washout       : {WASHOUT}")
-print(f"Feature dim   : {X.shape[1]}")
-print(f"Train samples : {len(y_train)}")
-print(f"Test samples  : {len(y_test)}")
-print(f"Ridge         : {RIDGE:.1e}")
-print(f"Train NRMSE   : {train_nrmse:.6f}")
-print(f"Test NRMSE    : {test_nrmse:.6f}")
-
-
-# A
-X_input = u[WASHOUT:-1].reshape(-1, 1)
-
-n_train = int(0.8 * len(X_input))
-
-X_input_train = X_input[:n_train]
-X_input_test  = X_input[n_train:]
-
-X_input_train, X_input_test = normalize_train_test(
-    X_input_train,
-    X_input_test
-)
-
-
-y_train = y[WASHOUT + 1:][:n_train]
-y_test  = y[WASHOUT + 1:][n_train:]
-
-
-
-W_input = train_ridge_regression(
-    X_input_train,
-    y_train,
-    ridge=1e-6
-)
-
-y_input_train_pred = predict_ridge_regression(
-    X_input_train,
-    W_input
-)
-
-y_input_test_pred = predict_ridge_regression(
-    X_input_test,
-    W_input
-)
-
-print("\n=== Current-input baseline ===")
-print(
-    "Train NRMSE:",
-    nrmse(y_train, y_input_train_pred)
-)
-print(
-    "Test NRMSE :",
-    nrmse(y_test, y_input_test_pred)
-)
-
-# B
-def build_input_history_features(u, order=10):
-
-    X = np.zeros((len(u), order))
-
-    for n in range(len(u)):
-        for k in range(order):
-
-            idx = n - k
-
-            if idx >= 0:
-                X[n, k] = u[idx]
-
-    return X
-
-X_input = build_input_history_features(u, order=10)[WASHOUT:-1]
-
-n_train = int(0.8 * len(X_input))
-
-X_input_train = X_input[:n_train]
-X_input_test  = X_input[n_train:]
-
-y_train = y[WASHOUT + 1:][:n_train]
-y_test  = y[WASHOUT + 1:][n_train:]
-
-X_input_train, X_input_test = normalize_train_test(
-    X_input_train,
-    X_input_test
-)
-
-W_input = train_ridge_regression(
-    X_input_train,
-    y_train,
-    ridge=1e-6
-)
-
-y_input_train_pred = predict_ridge_regression(
-    X_input_train,
-    W_input
-)
-
-y_input_test_pred = predict_ridge_regression(
-    X_input_test,
-    W_input
-)
-
-print("\n=== 10-tap input-history baseline ===")
-print(
-    "Train NRMSE:",
-    nrmse(y_train, y_input_train_pred)
-)
-print(
-    "Test NRMSE :",
-    nrmse(y_test, y_input_test_pred)
-)
-
-
-
-
-
-
-print("\n=== 10-tap input + 2nd-order polynomial baseline ===")
-
-from sklearn.preprocessing import PolynomialFeatures
-
-poly = PolynomialFeatures(
-    degree=2,
-    include_bias=False
-)
-
-X_hist = build_input_history_features(
-    u,
-    order=10
-)
-
-X_poly = poly.fit_transform(X_hist)
-
-X_input = X_poly[WASHOUT:-1]
-y_input = y[WASHOUT + 1:]
-
-
-n_train = int(0.8 * len(X_input))
-
-X_input_train = X_input[:n_train]
-X_input_test  = X_input[n_train:]
-
-y_train = y[WASHOUT + 1:][:n_train]
-y_test  = y[WASHOUT + 1:][n_train:]
-
-X_input_train, X_input_test = normalize_train_test(
-    X_input_train,
-    X_input_test
-)
-
-W_input = train_ridge_regression(
-    X_input_train,
-    y_train,
-    ridge=1e-6
-)
-
-y_input_train_pred = predict_ridge_regression(
-    X_input_train,
-    W_input
-)
-
-y_input_test_pred = predict_ridge_regression(
-    X_input_test,
-    W_input
-)
-
-print("\n=== 10-tap input-history baseline ===")
-print(
-    "Train NRMSE:",
-    nrmse(y_train, y_input_train_pred)
-)
-print(
-    "Test NRMSE :",
-    nrmse(y_test, y_input_test_pred)
-)
-
-
-print("\n=== PT reservoir + 2nd-order polynomial readout ===")
-poly = PolynomialFeatures(
-    degree=2,
-    include_bias=False
-)
-
-X_poly = poly.fit_transform(X)
-
-X_input = X_poly[WASHOUT:-1]
-y_input = y[WASHOUT + 1:]
-
-
-n_train = int(0.8 * len(X_input))
-
-X_input_train = X_input[:n_train]
-X_input_test  = X_input[n_train:]
-
-y_train = y[WASHOUT + 1:][:n_train]
-y_test  = y[WASHOUT + 1:][n_train:]
-
-X_input_train, X_input_test = normalize_train_test(
-            X_input_train,
-            X_input_test
-        )
-
-W_input = train_ridge_regression(
-    X_input_train,
-    y_train,
-    ridge=1e-6
-)
-
-y_input_train_pred = predict_ridge_regression(
-    X_input_train,
-    W_input
-)
-
-y_input_test_pred = predict_ridge_regression(
-    X_input_test,
-    W_input
-)
-
-print("\n=== 10-tap input-history baseline ===")
-print(
-    "Train NRMSE:",
-    nrmse(y_train, y_input_train_pred)
-)
-print(
-    "Test NRMSE :",
-    nrmse(y_test, y_input_test_pred)
-)
