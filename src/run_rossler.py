@@ -7,9 +7,8 @@ from src.tasks.benchmarks.rossler import generate_rossler
 from src.utils.encoding import sample_hold_input
 from src.utils.features import extract_temporal_features
 from src.readout.ridge import train_ridge_regression, predict_ridge_regression
-from src.readout.metrics import nrmse
+from src.readout.metrics import nrmse, pearson_r
 from src.readout.preprocessing import fit_standardizer, transform_standardizer
-
 
 # ---------------- Configuration ----------------
 N_SAMPLES = 3000
@@ -33,13 +32,6 @@ ETA = 1.0
 RIDGE = 1e-6
 HISTORY_TAPS = 10
 
-
-def pearson_r(y_true, y_pred):
-    y_true = np.asarray(y_true)
-    y_pred = np.asarray(y_pred)
-    if np.std(y_true) < 1e-15 or np.std(y_pred) < 1e-15:
-        return np.nan
-    return np.corrcoef(y_true, y_pred)[0, 1]
 
 
 def fit_eval(name, X, Y, n_train):
@@ -79,30 +71,46 @@ def fit_eval(name, X, Y, n_train):
 
 
 def main():
-    _, x, y, z = generate_rossler(
+    task_data = generate_rossler(
         n_samples=N_SAMPLES, dt=ROSS_DT, transient=ROSS_TRANSIENT,
-        a=A, b=B, c=C
+        a=A, b=B, c=C, washout=WASHOUT, train_ratio=TRAIN_RATIO
     )
+    u = task_data.u
+    Y_all = task_data.y
+    x = task_data.metadata['raw_x']
+    input_scale = task_data.metadata['input_scale']
+    y = Y_all[:, 0]
+    z = Y_all[:, 1]
+    n_symbols = len(u)
 
     # Only x is observable/input. Normalize only for physical drive.
-    input_scale = np.max(np.abs(x))
-    u = x / input_scale
-
+    
     input_func = sample_hold_input(u, T_SYMBOL, amplitude_scale=I_SCALE)
-    t_end = N_SAMPLES * T_SYMBOL
-    t_eval = np.linspace(0.0, t_end, N_SAMPLES * POINTS_PER_SYMBOL, endpoint=False)
+    t_end = n_symbols * T_SYMBOL
+    t_eval = np.linspace(0.0, t_end, n_symbols * POINTS_PER_SYMBOL, endpoint=False)
 
     reservoir = PTSingleReservoir(eta=ETA, alpha=ALPHA)
     sol = reservoir.simulate(input_func=input_func,
                              t_span=(0.0, t_end),
                              t_eval=t_eval,
                              x0=np.zeros(4))
-    Xpt = extract_temporal_features(sol, N_SAMPLES, T_SYMBOL, k=K)
+
+    if not sol.success:
+        raise RuntimeError(
+            f"Reservoir simulation failed: {sol.message}"
+        )
+
+    if not np.all(np.isfinite(sol.y)):
+        raise RuntimeError(
+            "Reservoir simulation contains NaN or Inf"
+        )
+
+    Xpt = extract_temporal_features(sol, n_symbols, T_SYMBOL, k=K)
 
     # Common range must support the explicit history baseline.
-    start = max(WASHOUT, HISTORY_TAPS - 1)
-    idx = np.arange(start, N_SAMPLES)
-    Y = np.column_stack([y[idx], z[idx]])
+    start = max(task_data.washout, HISTORY_TAPS - 1)
+    idx = np.arange(start, n_symbols)
+    Y = task_data.y[idx]
 
     X_current = x[idx, None]
     X_history = np.column_stack([
@@ -111,7 +119,7 @@ def main():
     X_pt = Xpt[idx]
 
     n = len(idx)
-    n_train = int(TRAIN_RATIO * n)
+    n_train = int(task_data.train_ratio * n)
 
     print(f"Tc               = {TC*1e9:.4f} ns")
     print(f"T_SYMBOL         = {T_SYMBOL*1e9:.4f} ns")
