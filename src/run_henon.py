@@ -7,6 +7,7 @@ from src.utils.features import extract_temporal_features
 from src.readout.ridge import train_ridge_regression, predict_ridge_regression
 from src.readout.metrics import nrmse
 from src.readout.preprocessing import fit_standardizer, transform_standardizer
+from src.readout.metrics import pearson_r, nrmse
 
 # ============================================================
 # Configuration
@@ -37,14 +38,6 @@ HENON_B = 0.3
 # ============================================================
 # Helpers
 # ============================================================
-
-
-def pearson_r(y_true, y_pred):
-    y_true = np.asarray(y_true, dtype=float)
-    y_pred = np.asarray(y_pred, dtype=float)
-    if np.std(y_true) < 1e-15 or np.std(y_pred) < 1e-15:
-        return np.nan
-    return np.corrcoef(y_true, y_pred)[0, 1]
 
 
 def evaluate_ridge(X_train, X_test, y_train, y_test, ridge=1e-6):
@@ -78,18 +71,25 @@ def print_result(name, feature_dim, result):
 # Generate Hénon trajectory
 # ============================================================
 
-x, y = generate_henon(
+task_data = generate_henon(
     n_samples=N_SAMPLES,
     a=HENON_A,
     b=HENON_B,
     transient=TRANSIENT,
+    washout=WASHOUT,
+    train_ratio=TRAIN_RATIO,
 )
+u = task_data.u
+y = task_data.y
+
+x = task_data.metadata['raw_x']
+u_scale = task_data.metadata['input_scale']
+
+n_symbols = len(u)
 
 # Observable supplied to the reservoir: x[n]
 # Hidden state to reconstruct: y[n]
 # Normalize only the physical input amplitude. The target remains physical y[n].
-u_scale = np.max(np.abs(x))
-u = x / u_scale
 
 input_func = sample_hold_input(
     u,
@@ -103,7 +103,7 @@ input_func = sample_hold_input(
 # ============================================================
 
 dt = T_SYMBOL / POINTS_PER_SYMBOL
-t_end = N_SAMPLES * T_SYMBOL
+t_end = n_symbols * T_SYMBOL
 t_eval = np.arange(0.0, t_end, dt)
 
 print(f"Tc               = {Tc * 1e9:.4f} ns")
@@ -134,7 +134,7 @@ sol = reservoir.simulate(
 
 X = extract_temporal_features(
     sol,
-    n_symbols=N_SAMPLES,
+    n_symbols=n_symbols,
     symbol_period=T_SYMBOL,
     k=K,
 )
@@ -162,8 +162,8 @@ print("V2 range:", np.min(sol.y[1]), np.max(sol.y[1]))
 # perfectly and verifies that the target/alignment are correct.
 # ============================================================
 
-start = max(WASHOUT, 1)
-indices = np.arange(start, N_SAMPLES)
+start = max(task_data.washout, 1)
+indices = np.arange(start, n_symbols)
 
 y_eval = y[indices]
 X_pt = X[indices]
@@ -173,13 +173,13 @@ X_history2 = np.column_stack([
     x[indices - 1],
 ])
 
-n_train = int(TRAIN_RATIO * len(indices))
+n_train = int(task_data.train_ratio * len(indices))
 
 y_train = y_eval[:n_train]
 y_test = y_eval[n_train:]
 
 print("\n=== Common evaluation set ===")
-print(f"Valid sample range : [{start}, {N_SAMPLES - 1}]")
+print(f"Valid sample range : [{start}, {n_symbols - 1}]")
 print(f"Samples            : {len(y_eval)}")
 print(f"Train samples      : {len(y_train)}")
 print(f"Test samples       : {len(y_test)}")
