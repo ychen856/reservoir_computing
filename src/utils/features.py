@@ -102,16 +102,3 @@ def extract_temporal_features(
         X[n, 1::2] = V2_samples
 
     return X
-
-
-def normalize_train_test(X_train, X_test):
-
-    mu = X_train.mean(axis=0)
-    std = X_train.std(axis=0)
-
-    std[std < 1e-12] = 1.0
-
-    X_train_n = (X_train - mu) / std
-    X_test_n = (X_test - mu) / std
-
-    return X_train_n, X_test_n

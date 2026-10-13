@@ -1,10 +1,12 @@
 import numpy as np
 
 from src.circuits.pt_single import PTSingleReservoir
-from src.tasks.henon import generate_henon
-from src.utils.task_encoding import sample_hold_input
-from src.utils.task_features import extract_temporal_features
-from src.readout.ridge import train_ridge_regression, predict_ridge_regression, nrmse
+from src.tasks.benchmarks.henon import generate_henon
+from src.utils.encoding import sample_hold_input
+from src.utils.features import extract_temporal_features
+from src.readout.ridge import train_ridge_regression, predict_ridge_regression
+from src.readout.metrics import nrmse
+from src.readout.preprocessing import fit_standardizer, transform_standardizer
 
 # ============================================================
 # Configuration
@@ -36,12 +38,6 @@ HENON_B = 0.3
 # Helpers
 # ============================================================
 
-def normalize_train_test(X_train, X_test):
-    mu = X_train.mean(axis=0)
-    std = X_train.std(axis=0)
-    std[std < 1e-12] = 1.0
-    return (X_train - mu) / std, (X_test - mu) / std
-
 
 def pearson_r(y_true, y_pred):
     y_true = np.asarray(y_true, dtype=float)
@@ -52,7 +48,10 @@ def pearson_r(y_true, y_pred):
 
 
 def evaluate_ridge(X_train, X_test, y_train, y_test, ridge=1e-6):
-    X_train_n, X_test_n = normalize_train_test(X_train, X_test)
+    mu, std = fit_standardizer(X_train)
+
+    X_train_n = transform_standardizer(X_train, mu, std)
+    X_test_n = transform_standardizer(X_test, mu, std)
 
     W = train_ridge_regression(X_train_n, y_train, ridge=ridge)
     y_train_pred = predict_ridge_regression(X_train_n, W)

@@ -433,41 +433,13 @@ def simulate_mpsk_repeated_noise(
                         print("ADC quantization = OFF")
                     else:
                         print(f"ADC resolution = {adc_bits} bits")
-                    '''plot_adc_sanity_check(
-                        t_eval=t_eval,
-                        u_input=u_input,
-                        t_adc=t_adc,
-                        u_adc_used=u_adc_used,
-                        input_func=input_func,
-                        t_center=t_center,
-                        fc=fc,
-                        adc_bits=adc_bits
-                    )'''
+
 
 
 
             # ------------------------------------------------
             # Reservoir simulation
             # ------------------------------------------------
-
-            '''if alpha == 0.0:
-
-                sol = pt_reservoir.simulate_history(
-                    t_end=t_end,
-                    t_eval=t_eval,
-                    eta=eta,
-                    input_func=input_func
-                )
-
-            else:
-
-                sol = pt_reservoir.simulate_nonlinear(
-                    eta=eta,
-                    input_func=input_func,
-                    alpha=alpha,
-                    t_span=(t_eval[0], t_eval[-1]),
-                    t_eval=t_eval
-                )'''
             sol = pt_reservoir.simulate(
                 input_func=input_func,
                 t_span=(t_eval[0], t_eval[-1]),

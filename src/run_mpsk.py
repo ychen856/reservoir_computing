@@ -5,9 +5,11 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import confusion_matrix
 
 from src.circuits.pt_single import PTSingleReservoir
-from src.tasks.mpsk import simulate_mpsk_repeated_noise
+from src.tasks.applications.mpsk import simulate_mpsk_repeated_noise
 from src.readout.ridge import train_linear_readout, predict_linear_readout
 from src.utils.utils import build_repeated_noise_dataset
+from src.readout.preprocessing import fit_standardizer, transform_standardizer
+from src.readout.metrics import accuracy, symbol_error_rate
 
 
 
@@ -199,12 +201,10 @@ def main():
 
 
 
-        mu = x_train.mean(axis=0)
-        std = x_train.std(axis=0)
-        std = np.where(std < 1e-12, 1.0, std)
+        mu, std = fit_standardizer(x_train)
 
-        x_train_n = (x_train - mu) / std
-        x_test_n  = (x_test  - mu) / std
+        x_train_n = transform_standardizer(x_train, mu, std)
+        x_test_n = transform_standardizer(x_test, mu, std)
 
         pca = PCA(n_components=2)
         X_train_pca = pca.fit_transform(x_train_n)
@@ -239,15 +239,6 @@ def main():
         plt.tight_layout()
         plt.show()
         
-            
-        
-        mu = x_train.mean(axis=0)
-        std = x_train.std(axis=0)
-        print("X_train shape:", x_train.shape)
-        print("mu shape:", mu.shape)
-        print("std shape:", std.shape)
-        print("std:", std)
-        std[std < 1e-12] = 1.0
         
     
         Wout = train_linear_readout(
@@ -265,14 +256,19 @@ def main():
             x_test_n,
             Wout
         )
-        print(f"Train accuracy = {np.mean(x_pred == y_train)*100:.2f}%")
-        print(f"Test accuracy  = {np.mean(y_pred == y_test)*100:.2f}%")
+
+        train_acc = accuracy(y_train, x_pred)
+        test_acc = accuracy(y_test, y_pred)
+
+        train_ser = symbol_error_rate(y_train, x_pred)
+        test_ser = symbol_error_rate(y_test, y_pred)
+
+        print(f"Train accuracy = {100*train_acc:.2f}%")
+        print(f"Test accuracy  = {100*test_acc:.2f}%")
 
         print(confusion_matrix(y_test, y_pred))
-        
-        acc = np.mean(y_pred == y_test)
-        
-        print(f"Test accuracy = {100*acc:.2f}%")
+        print(f"Train symbol error rate = {100*train_ser:.2f}%")
+        print(f"Test symbol error rate  = {100*test_ser:.2f}%")
 
 if __name__=="__main__":
     main()

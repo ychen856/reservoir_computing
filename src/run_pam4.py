@@ -1,10 +1,13 @@
 import numpy as np
 
 from src.circuits.pt_single import PTSingleReservoir
-from src.tasks.pam4 import apply_linear_channel, build_channel_window, generate_pam4, quantize_pam4_class
-from src.utils.task_encoding import sample_hold_input, carrier_encoded_input
-from src.utils.task_features import extract_temporal_features
-from src.readout.ridge import train_ridge_regression, predict_ridge_regression, nrmse
+from src.tasks.applications.pam4 import apply_linear_channel, build_channel_window, generate_pam4, quantize_pam4_class
+from src.utils.encoding import sample_hold_input, carrier_encoded_input
+from src.utils.features import extract_temporal_features
+from src.readout.ridge import train_ridge_regression, predict_ridge_regression
+from src.readout.metrics import nrmse
+from src.readout.preprocessing import fit_standardizer, transform_standardizer
+from src.readout.metrics import accuracy, symbol_error_rate
 
 # ============================================================
 # Configuration
@@ -160,13 +163,10 @@ y_test = y_eval[n_train:]
 # Normalize using training set only
 # ============================================================
 
-mu = X_train.mean(axis=0)
-std = X_train.std(axis=0)
+mu, std = fit_standardizer(X_train)
 
-std[std < 1e-12] = 1.0
-
-X_train_n = (X_train - mu) / std
-X_test_n = (X_test - mu) / std
+X_train_n = transform_standardizer(X_train, mu, std)
+X_test_n = transform_standardizer(X_test, mu, std)
 
 
 # ============================================================
@@ -255,16 +255,12 @@ y_test_hat = quantize_pam4_class(
     y_test_pred
 )
 
-train_acc = np.mean(
-    y_train_hat == y_train
-)
 
-test_acc = np.mean(
-    y_test_hat == y_test
-)
+train_acc = accuracy(y_train, y_train_hat)
+test_acc = accuracy(y_test, y_test_hat)
 
-train_ser = 1.0 - train_acc
-test_ser = 1.0 - test_acc
+train_ser = symbol_error_rate(y_train, y_train_hat)
+test_ser = symbol_error_rate(y_test, y_test_hat)
 
 print(f"Train accuracy : {train_acc:.4%}")
 print(f"Test accuracy  : {test_acc:.4%}")

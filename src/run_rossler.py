@@ -1,12 +1,14 @@
 import numpy as np
 
 from src.circuits.pt_single import PTSingleReservoir
-from src.tasks.rossler import generate_rossler
+from src.tasks.benchmarks.rossler import generate_rossler
 
 # Reuse these imports/paths from your existing Hénon runner if their module differs.
-from src.utils.task_encoding import sample_hold_input
-from src.utils.task_features import extract_temporal_features
-from src.readout.ridge import train_ridge_regression, predict_ridge_regression, nrmse
+from src.utils.encoding import sample_hold_input
+from src.utils.features import extract_temporal_features
+from src.readout.ridge import train_ridge_regression, predict_ridge_regression
+from src.readout.metrics import nrmse
+from src.readout.preprocessing import fit_standardizer, transform_standardizer
 
 
 # ---------------- Configuration ----------------
@@ -44,11 +46,11 @@ def fit_eval(name, X, Y, n_train):
     Xtr, Xte = X[:n_train], X[n_train:]
     Ytr, Yte = Y[:n_train], Y[n_train:]
 
-    mu = Xtr.mean(axis=0)
-    sd = Xtr.std(axis=0)
-    sd[sd < 1e-12] = 1.0
-    Xtr = (Xtr - mu) / sd
-    Xte = (Xte - mu) / sd
+
+    mu, std = fit_standardizer(Xtr)
+
+    Xtr = transform_standardizer(Xtr, mu, std)
+    Xte = transform_standardizer(Xte, mu, std)
 
     W = train_ridge_regression(Xtr, Ytr, ridge=RIDGE)
     Ptr = predict_ridge_regression(Xtr, W)
