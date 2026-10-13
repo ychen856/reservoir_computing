@@ -1,41 +1,24 @@
 import numpy as np
+from src.tasks.base import TaskData
 
 
 def generate_sine_cube(
     n_samples=2000,
-    n_periods=20,
-    amplitude=1.0,
+    washout=100,
+    train_ratio=0.8,
 ):
-    """
-    Generate the sine-to-cube benchmark.
 
-    Input:
-        u(t) = A sin(2*pi*f*t)
+    t = np.linspace(0, 20 * np.pi, n_samples)
 
-    Target:
-        y(t) = u(t)^3
+    u = np.sin(t)
+    y = u ** 3
 
-    Returns
-    -------
-    t : ndarray, shape (n_samples,)
-        Normalized task time.
-
-    u : ndarray, shape (n_samples,)
-        Input sequence.
-
-    y : ndarray, shape (n_samples,)
-        Target sequence.
-    """
-
-    t = np.linspace(
-        0.0,
-        n_periods,
-        n_samples,
-        endpoint=False
+    return TaskData(
+        name="sine_cube",
+        u=u,
+        y=y,
+        task_type="regression",
+        washout=washout,
+        train_ratio=train_ratio,
+        target_offset=0,
     )
-
-    u = amplitude * np.sin(2.0 * np.pi * t)
-
-    y = u**3
-
-    return t, u, y

@@ -34,11 +34,18 @@ POINTS_PER_SYMBOL = 16
 # Generate task
 # ============================================================
 
-_, u, y = generate_sine_cube(
+'''_, u, y = generate_sine_cube(
     n_samples=N_SAMPLES,
     n_periods=20
-)
+)'''
 
+task_data = generate_sine_cube(
+    n_samples=N_SAMPLES,
+    washout=100,
+    train_ratio=0.8
+)
+u = task_data.u
+y = task_data.y
 
 # ============================================================
 # Encode input
@@ -62,7 +69,8 @@ input_func = sample_hold_input(
 
 dt = T_SYMBOL / POINTS_PER_SYMBOL
 
-t_end = N_SAMPLES * T_SYMBOL
+n_symbols = len(task_data.u)
+t_end = n_symbols * T_SYMBOL
 
 t_eval = np.arange(
     0.0,
@@ -100,7 +108,7 @@ sol = reservoir.simulate(
 
 X = extract_temporal_features(
     sol,
-    n_symbols=N_SAMPLES,
+    n_symbols=n_symbols,
     symbol_period=T_SYMBOL,
     k=K
 )
@@ -131,17 +139,17 @@ print(np.min(sol.y[1]), np.max(sol.y[1]))
 # Washout
 # ============================================================
 
-WASHOUT = 100
+WASHOUT = task_data.washout
 
 X_eval = X[WASHOUT:]
-y_eval = y[WASHOUT:]
+y_eval = task_data.y[WASHOUT:]
 
 
 # ============================================================
 # Sequential train / test split
 # ============================================================
 
-TRAIN_RATIO = 0.8
+TRAIN_RATIO = task_data.train_ratio
 
 n_train = int(TRAIN_RATIO * len(X_eval))
 
@@ -212,38 +220,40 @@ print(f"Test NRMSE    : {test_nrmse:.6f}")
 
 
 
-X_input = u[WASHOUT:].reshape(-1, 1)
+# ============================================================
+# Input-only baseline
+# ============================================================
 
-n_train = int(0.8 * len(X_input))
+X_input = task_data.u[WASHOUT:].reshape(-1, 1)
 
 X_input_train = X_input[:n_train]
-X_input_test  = X_input[n_train:]
+X_input_test = X_input[n_train:]
 
-y_train = y[WASHOUT:][:n_train]
-y_test  = y[WASHOUT:][n_train:]
+y_input_train = y_eval[:n_train]
+y_input_test = y_eval[n_train:]
 
 W_input = train_ridge_regression(
     X_input_train,
-    y_train,
-    ridge=1e-6
+    y_input_train,
+    ridge=RIDGE,
 )
 
 y_input_train_pred = predict_ridge_regression(
     X_input_train,
-    W_input
+    W_input,
 )
 
 y_input_test_pred = predict_ridge_regression(
     X_input_test,
-    W_input
+    W_input,
 )
 
 print("\n=== Input-only baseline ===")
 print(
     "Train NRMSE:",
-    nrmse(y_train, y_input_train_pred)
+    nrmse(y_input_train, y_input_train_pred)
 )
 print(
     "Test NRMSE :",
-    nrmse(y_test, y_input_test_pred)
+    nrmse(y_input_test, y_input_test_pred)
 )
