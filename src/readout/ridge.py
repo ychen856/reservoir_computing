@@ -74,15 +74,3 @@ def predict_ridge_regression(X, W):
     return X_aug @ W
 
 
-
-
-def nrmse(y_true, y_pred):
-
-    mse = np.mean(
-        (y_true - y_pred)**2
-    )
-
-    return np.sqrt(
-        mse / np.var(y_true)
-    )
-
