@@ -1,48 +1,15 @@
 import numpy as np
+from src.utils.sampling import sample_reservoir_states
 
-
-def extract_temporal_features_temp(
-    sol,
-    n_symbols,
-    symbol_period,
-    k=8,
-):
+def sample_reservoir_voltages(sol, sample_times):
     """
-    Extract K temporal samples of V1 and V2
-    from each task symbol.
+    Compatibility wrapper for V1/V2 sampling.
     """
-
-    t = sol.t
-    V1 = sol.y[0]
-    V2 = sol.y[1]
-
-    X = []
-
-    for n in range(n_symbols):
-
-        t_start = n * symbol_period
-        t_stop = (n + 1) * symbol_period
-
-        sample_times = np.linspace(
-            t_start,
-            t_stop,
-            k + 2
-        )[1:-1]
-
-        features = []
-
-        for ts in sample_times:
-            idx = np.argmin(np.abs(t - ts))
-
-            features.extend([
-                V1[idx],
-                V2[idx]
-            ])
-
-        X.append(features)
-
-    return np.asarray(X)
-
+    return sample_reservoir_states(
+        sol,
+        sample_times,
+        state_indices=(0, 1),
+    )
 
 def extract_temporal_features(
     sol,
@@ -50,55 +17,134 @@ def extract_temporal_features(
     symbol_period,
     k=8,
     delay_symbols=0,
+    state_indices=(0, 1),
 ):
     """
-    Extract K temporal nodes from V1 and V2 for each symbol.
+    Extract K temporal nodes per symbol from selected reservoir states.
 
-    delay_symbols = 0:
-        sample during symbol n
-
-    delay_symbols = 1:
-        sample during symbol n+1
-
-    delay_symbols = 2:
-        sample during symbol n+2
+    Returns
+    -------
+    X : ndarray, shape (n_valid, k * len(state_indices))
     """
+
+    if k < 1:
+        raise ValueError("k must be >= 1")
+
+    if delay_symbols < 0:
+        raise ValueError("delay_symbols must be >= 0")
+
+    if len(state_indices) == 0:
+        raise ValueError("state_indices cannot be empty")
 
     n_valid = n_symbols - delay_symbols
 
-    X = np.zeros(
-        (n_valid, 2 * k)
-    )
+    if n_valid <= 0:
+        raise ValueError("No valid symbols after delay")
+
+    X = np.zeros((n_valid, k * len(state_indices)))
 
     for n in range(n_valid):
 
-        t_start = (
-            n + delay_symbols
-        ) * symbol_period
-
-        t_stop = (
-            n + delay_symbols + 1
-        ) * symbol_period
+        t_start = (n + delay_symbols) * symbol_period
+        t_stop = (n + delay_symbols + 1) * symbol_period
 
         sample_times = np.linspace(
             t_start,
             t_stop,
-            k + 2
+            k + 2,
         )[1:-1]
 
-        V1_samples = np.interp(
+        X[n] = sample_reservoir_states(
+            sol,
             sample_times,
-            sol.t,
-            sol.y[0]
+            state_indices=state_indices,
         )
-
-        V2_samples = np.interp(
-            sample_times,
-            sol.t,
-            sol.y[1]
-        )
-
-        X[n, 0::2] = V1_samples
-        X[n, 1::2] = V2_samples
 
     return X
+
+def extract_temporal_voltage_feature(
+    sol,
+    K,
+    t_start,
+    t_end,
+):
+
+    sample_times = np.linspace(
+        t_start,
+        t_end,
+        K,
+    )
+
+    feature = sample_reservoir_voltages(
+        sol,
+        sample_times,
+    )
+
+    return sample_times, feature
+
+
+
+def build_mpsk_feature_matrix(
+    sols,
+    K,
+    t_start,
+    t_end
+):
+
+    features = []
+
+    sample_times = None
+
+    for sol in sols:
+
+        sample_times, feature = (
+            extract_temporal_voltage_feature(
+                sol=sol,
+                K=K,
+                t_start=t_start,
+                t_end=t_end
+            )
+        )
+
+        features.append(feature)
+
+    X = np.asarray(features)
+
+    return sample_times, X
+
+
+
+
+
+def build_repeated_noise_dataset(
+    sols_by_class,
+    K,
+    t_start,
+    t_end
+):
+
+    X = []
+    y = []
+
+    sample_times = None
+
+    for m, class_sols in enumerate(sols_by_class):
+
+        for sol in class_sols:
+
+            sample_times, feature = (
+                extract_temporal_voltage_feature(
+                    sol=sol,
+                    K=K,
+                    t_start=t_start,
+                    t_end=t_end
+                )
+            )
+
+            X.append(feature)
+            y.append(m)
+
+    X = np.asarray(X)
+    y = np.asarray(y)
+
+    return sample_times, X, y

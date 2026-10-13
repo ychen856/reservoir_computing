@@ -7,7 +7,7 @@ from sklearn.metrics import confusion_matrix
 from src.circuits.pt_single import PTSingleReservoir
 from src.tasks.applications.mpsk import simulate_mpsk_repeated_noise
 from src.readout.ridge import train_linear_readout, predict_linear_readout
-from src.utils.utils import build_repeated_noise_dataset
+from src.utils.features import build_repeated_noise_dataset
 from src.readout.preprocessing import fit_standardizer, transform_standardizer
 from src.readout.metrics import accuracy, symbol_error_rate
 

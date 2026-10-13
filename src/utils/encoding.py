@@ -10,6 +10,8 @@ def sample_hold_input(
     Convert a discrete task sequence into a continuous-time
     zero-order-hold input function.
     """
+    if symbol_period <= 0:
+        raise ValueError("symbol_period must be positive")
 
     sequence = np.asarray(sequence, dtype=float)
 
@@ -33,6 +35,9 @@ def carrier_encoded_input(
     carrier_frequency,
     amplitude_scale=1.0
 ):
+    if symbol_period <= 0:
+        raise ValueError("symbol_period must be positive")
+    
     sequence = np.asarray(sequence, dtype=float)
 
     def input_func(t):
