@@ -1,4 +1,5 @@
 import numpy as np
+from src.tasks.base import TaskData
 
 
 # ============================================================
@@ -180,102 +181,163 @@ def simulate_mpsk(
 
 
 
-def simulate_mpsk_repeated_noise(
-    pt_reservoir,
-    M,
-    t_center,
+def apply_adc_to_waveform(
+    waveform,
     t_eval,
-    t_end,
+    fs_adc,
+    adc_bits=None,
+    full_scale=None,
+):
+    """
+    ADC sampling + optional quantization + ZOH reconstruction.
+
+    Returns waveform evaluated on the original t_eval grid.
+    """
+
+    waveform = np.asarray(waveform, dtype=float)
+    t_eval = np.asarray(t_eval, dtype=float)
+
+    dt_adc = 1.0 / fs_adc
+
+    t_adc = np.arange(
+        t_eval[0],
+        t_eval[-1] + dt_adc,
+        dt_adc,
+    )
+
+    # Sample analog waveform
+    u_adc = np.interp(
+        t_adc,
+        t_eval,
+        waveform,
+    )
+
+    # Optional quantization
+    if adc_bits is not None:
+
+        if full_scale is None:
+            raise ValueError(
+                "full_scale is required for ADC quantization"
+            )
+
+        levels = 2 ** adc_bits
+
+        u_adc_clip = np.clip(
+            u_adc,
+            -full_scale,
+            full_scale,
+        )
+
+        code = np.round(
+            (u_adc_clip + full_scale)
+            / (2.0 * full_scale)
+            * (levels - 1)
+        )
+
+        u_adc = (
+            code / (levels - 1)
+            * 2.0 * full_scale
+            - full_scale
+        )
+
+    # Zero-order hold on original simulation grid
+    indices = np.searchsorted(
+        t_adc,
+        t_eval,
+        side="right",
+    ) - 1
+
+    indices = np.clip(
+        indices,
+        0,
+        len(u_adc) - 1,
+    )
+
+    return u_adc[indices]
+
+
+
+
+
+
+
+def simulate_mpsk_dataset(
+    reservoir,
+    task_data,
+):
+    """
+    Simulate each MPSK waveform independently.
+    """
+
+    t_eval = task_data.metadata["t_eval"]
+
+    sols = []
+
+    for i, waveform in enumerate(task_data.u):
+
+        def input_func(t, u=waveform):
+            return np.interp(
+                t,
+                t_eval,
+                u,
+                left=0.0,
+                right=0.0,
+            )
+
+        sol = reservoir.simulate(
+            input_func=input_func,
+            t_span=(t_eval[0], t_eval[-1]),
+            t_eval=t_eval,
+        )
+
+        if not sol.success:
+            raise RuntimeError(
+                f"Trial {i}: {sol.message}"
+            )
+
+        if not np.all(np.isfinite(sol.y)):
+            raise RuntimeError(
+                f"Trial {i}: NaN/Inf in reservoir states"
+            )
+
+        sols.append(sol)
+
+    return sols
+
+
+def generate_mpsk_task(
+    M,
+    n_repeat,
+    t_eval,
+    t_center,
     sigma,
     Iin_peak,
     fc,
-    n_repeat,
     add_noise=False,
     snr_db=20.0,
     seed=42,
     adc_enabled=False,
     fs_adc=None,
-    adc_bits=None
+    adc_bits=None,
 ):
     """
-    Simulate repeated M-PSK inputs through the reservoir.
+    Generate independent MPSK waveform trials.
 
-    For each M-PSK phase:
-        1. Generate a clean phase-modulated waveform.
-        2. Generate n_repeat independent AWGN realizations
-           if add_noise=True.
-        3. Pass each waveform through the reservoir.
-        4. Store the full continuous reservoir solution.
-
-    Parameters
-    Returns
-    -------
-    phases : ndarray, shape (M,)
-        M-PSK phases.
-
-    sols_by_class : list[list]
-        sols_by_class[m][r] is the reservoir solution
-        for phase m and realization r.
+    Each row of U is one complete waveform.
     """
 
-    # for adc
     rng = np.random.default_rng(seed)
-
-    sols_by_class = []
-
-    # ========================================================
-    # ADC sampling grid
-    # ========================================================
-
-    if adc_enabled:
-
-        if fs_adc is None:
-            raise ValueError(
-                "fs_adc must be specified when adc_enabled=True"
-            )
-
-        dt_adc = 1.0 / fs_adc
-
-        t_adc = np.arange(
-            t_eval[0],
-            t_eval[-1] + dt_adc,
-            dt_adc
-        )
-
-    else:
-
-        dt_adc = None
-        t_adc = None
-
-    
-
-    # ========================================================
-    # M-PSK constellation phases
-    # ========================================================
 
     phases = get_mpsk_phases(M)
 
-    # One RNG for the whole experiment:
-    # reproducible, but every realization gets different noise.
-    rng = np.random.default_rng(seed)
+    waveforms = []
+    labels = []
 
-    sols_by_class = []
-
-    # Region used to define signal power / SNR
     power_mask = (
-        np.abs(t_eval - t_center)
-        <= 3.0 * sigma
+        np.abs(t_eval - t_center) <= 3.0 * sigma
     )
 
-    # ========================================================
-    # Loop over M-PSK phases
-    # ========================================================
-
     for m, phase in enumerate(phases):
-
-        # ----------------------------------------------------
-        # Clean input for this phase
-        # ----------------------------------------------------
 
         u_clean = phase_modulated_pulse(
             t=t_eval,
@@ -283,177 +345,76 @@ def simulate_mpsk_repeated_noise(
             sigma=sigma,
             I_peak=Iin_peak,
             fc=fc,
-            phase=phase
+            phase=phase,
         )
 
-        # ----------------------------------------------------
-        # Determine AWGN power
-        # ----------------------------------------------------
-
         if add_noise:
-
-            P_signal = np.mean(
+            signal_power = np.mean(
                 u_clean[power_mask] ** 2
             )
 
-            P_noise = (
-                P_signal /
-                (10.0 ** (snr_db / 10.0))
+            noise_std = np.sqrt(
+                signal_power / (10.0 ** (snr_db / 10.0))
             )
 
-            noise_std = np.sqrt(P_noise)
 
-        class_sols = []
-
-        # ====================================================
-        # Independent realizations for this phase
-        # ====================================================
-
-        for r in range(n_repeat):
-
-            # ------------------------------------------------
-            # Build actual reservoir input
-            # ------------------------------------------------
+        for _ in range(n_repeat):
 
             if add_noise:
-
                 noise = rng.normal(
-                    loc=0.0,
-                    scale=noise_std,
-                    size=t_eval.shape
+                    0.0,
+                    noise_std,
+                    size=len(t_eval),
                 )
 
-                u_input = u_clean + noise
-
+                u = u_clean + noise
             else:
-
-                u_input = u_clean.copy()
-
-            # ------------------------------------------------
-            # Fixed waveform -> callable input function
-            # ------------------------------------------------
-            def input_func(t, u=u_input):
-
-                return np.interp(
-                    t,
-                    t_eval,
-                    u,
-                    left=0.0,
-                    right=0.0
-                )
+                u = u_clean.copy()
 
             if adc_enabled:
-                # --------------------------------------------
-                # ADC sampling
-                # --------------------------------------------
-
-                u_adc = input_func(t_adc)
-
-                # --------------------------------------------
-                # Optional ADC quantization
-                # --------------------------------------------
-
-                if adc_bits is not None:
-
-                    adc_full_scale = 1.2 * Iin_peak
-
-                    levels = 2 ** adc_bits
-
-                    u_adc_clip = np.clip(
-                        u_adc,
-                        -adc_full_scale,
-                        adc_full_scale
+                if fs_adc is None:
+                    raise ValueError(
+                        "fs_adc must be specified when ADC is enabled"
                     )
+            
+                u = apply_adc_to_waveform(
+                    waveform=u,
+                    t_eval=t_eval,
+                    fs_adc=fs_adc,
+                    adc_bits=adc_bits,
+                    full_scale=1.2 * Iin_peak,
+                )
 
-                    delta = (
-                        2.0 * adc_full_scale
-                        / (levels - 1)
-                    )
+            waveforms.append(u)
+            labels.append(m)
 
-                    u_adc_used = (
-                        np.round(
-                            (u_adc_clip + adc_full_scale)
-                            / delta
-                        )
-                        * delta
-                        - adc_full_scale
-                    )
+    U = np.asarray(waveforms)
+    y = np.asarray(labels, dtype=int)
 
-                else:
-                    u_adc_used = u_adc
-
-
-                # --------------------------------------------
-                # Zero-order hold reconstruction
-                # --------------------------------------------
-
-                def input_func(
-                    t,
-                    t_adc=t_adc,
-                    u_adc_used=u_adc_used,
-                    dt_adc=dt_adc
-                ):
-
-                    if t < t_adc[0] or t > t_adc[-1]:
-                        return 0.0
-
-                    idx = int(
-                        np.floor(
-                            (t - t_adc[0]) / dt_adc
-                        )
-                    )
-
-                    idx = np.clip(
-                        idx,
-                        0,
-                        len(u_adc_used) - 1
-                    )
-
-                    
-
-                    return u_adc_used[idx]
-
-                # ------------------------------------------------------------
-                # ADC sanity-check plot
-                # Only plot the first phase / first noise realization
-                # ------------------------------------------------------------
-                                    
-                if (
-                    adc_enabled
-                    and m == 0
-                    and r == 0
-                ):
-                    print("\n=== ADC sanity check ===")
-                    print(f"Carrier frequency = {fc/1e6:.3f} MHz")
-                    print(f"ADC sampling rate = {fs_adc/1e6:.3f} MS/s")
-                    print(f"ADC samples/cycle = {fs_adc/fc:.3f}")
-                    print(f"ADC sample interval = {dt_adc*1e9:.3f} ns")
-                
-                    if adc_bits is None:
-                        print("ADC quantization = OFF")
-                    else:
-                        print(f"ADC resolution = {adc_bits} bits")
-
-
-
-
-            # ------------------------------------------------
-            # Reservoir simulation
-            # ------------------------------------------------
-            sol = pt_reservoir.simulate(
-                input_func=input_func,
-                t_span=(t_eval[0], t_eval[-1]),
-                t_eval=t_eval,
-            )
-
-            class_sols.append(sol)
-
-        sols_by_class.append(class_sols)
-
-        print(
-            f"M={M}: completed phase "
-            f"{m + 1}/{M}, "
-            f"phi={phase / np.pi:.3f} pi"
-        )
-
-    return phases, sols_by_class
+    return TaskData(
+        name=f"{M}psk",
+        u=U,
+        y=y,
+        task_type="classification",
+        washout=0,
+        train_ratio=0.8,
+        target_offset=0,
+        metadata={
+            "M": M,
+            "phases": phases,
+            "t_eval": t_eval,
+            "t_center": t_center,
+            "sigma": sigma,
+            "fc": fc,
+            "Iin_peak": Iin_peak,
+            "n_repeat": n_repeat,
+            "add_noise": add_noise,
+            "snr_db": snr_db,
+            "seed": seed,
+            "simulation_mode": "independent_trials",
+            "readout_type": "onehot_ridge_classifier",
+            "adc_enabled": adc_enabled,
+            "fs_adc": fs_adc,
+            "adc_bits": adc_bits,
+        },
+    )

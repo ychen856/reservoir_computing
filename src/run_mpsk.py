@@ -5,13 +5,13 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import confusion_matrix
 
 from src.circuits.pt_single import PTSingleReservoir
-from src.tasks.applications.mpsk import simulate_mpsk_repeated_noise
+from src.tasks.applications.mpsk import simulate_mpsk_dataset, generate_mpsk_task
 from src.readout.ridge import train_linear_readout, predict_linear_readout
-from src.utils.features import build_repeated_noise_dataset
+from src.utils.features import build_mpsk_feature_matrix
 from src.readout.preprocessing import fit_standardizer, transform_standardizer
 from src.readout.metrics import accuracy, symbol_error_rate
-
-
+from src.simulation.runner import simulate_independent_trials
+from src.simulation.evaluation import evaluate_independent_classification
 
 
 def main():
@@ -19,6 +19,13 @@ def main():
     # ============================================================
     # 1. Carrier / pulse parameters
     # ============================================================
+    TRAIN_SEED = 42
+    TEST_SEED = 3
+
+    N_TRAIN_REPEAT = 300
+    N_TEST_REPEAT = 200
+
+    M = 4
 
     # Start close to the PT-RLC resonance
     fc = 48.0e6                 # carrier frequency [Hz]
@@ -116,7 +123,6 @@ def main():
     # ============================================================
     noise_enabled = True
     snr_db = 20.0
-    noise_seed = 42
 
 
     # ============================================================
@@ -128,42 +134,55 @@ def main():
 
 
     pt_reservoir = PTSingleReservoir()
-
-    train_phases, train_sols = simulate_mpsk_repeated_noise(
-        pt_reservoir,
-        M,
-        t_center,
-        t_eval,
-        t_end,
-        sigma,
-        Iin_peak,
-        fc,
-        n_repeat=N_REPEAT,
+    train_data = generate_mpsk_task(
+        M=M,
+        n_repeat=N_TRAIN_REPEAT,
+        t_eval=t_eval,
+        t_center=t_center,
+        sigma=sigma,
+        Iin_peak=Iin_peak,
+        fc=fc,
         add_noise=noise_enabled,
         snr_db=snr_db,
-        seed=noise_seed,
+        seed=TRAIN_SEED,
         adc_enabled=adc_enabled,
         fs_adc=fs_adc,
-        adc_bits=adc_bits
+        adc_bits=adc_bits,
     )
-    test_phases, test_sols = simulate_mpsk_repeated_noise(
-        pt_reservoir, 
-        M,
-        t_center,
-        t_eval,
-        t_end,
-        sigma,
-        Iin_peak,
-        fc,
-        n_repeat=200,
+    test_data = generate_mpsk_task(
+        M=M,
+        n_repeat=N_TEST_REPEAT,
+        t_eval=t_eval,
+        t_center=t_center,
+        sigma=sigma,
+        Iin_peak=Iin_peak,
+        fc=fc,
         add_noise=noise_enabled,
         snr_db=snr_db,
-        seed=noise_seed,
+        seed=TEST_SEED,
         adc_enabled=adc_enabled,
         fs_adc=fs_adc,
-        adc_bits=adc_bits
+        adc_bits=adc_bits,
     )
     
+
+    #train_sols = simulate_mpsk_dataset(pt_reservoir, train_data)
+    #test_sols = simulate_mpsk_dataset(pt_reservoir, test_data)
+    train_result = simulate_independent_trials(
+        reservoir=pt_reservoir,
+        task_data=train_data,
+        extract_features=False,
+    )
+
+    test_result = simulate_independent_trials(
+        reservoir=pt_reservoir,
+        task_data=test_data,
+        extract_features=False,
+    )
+
+    train_sols = train_result.solutions
+    test_sols = test_result.solutions
+
 
     mod_name = {
         2: "BPSK",
@@ -180,95 +199,43 @@ def main():
     # ============================================================
 
     print("\n=== Repeated-noise temporal sampling sweep ===")
+    RIDGE = 1e-6
 
     for K in K_list:
-        print('k: ', K)
-        # --------------------------------------------------------
-        # Build sampled reservoir feature dataset
-        # --------------------------------------------------------
-        sample_times, x_train, y_train = build_repeated_noise_dataset(
-            sols_by_class=train_sols,
+
+        print("k: ", K)
+
+        sample_times, x_train = build_mpsk_feature_matrix(
+            sols=train_sols,
             K=K,
             t_start=t_sample_start,
-            t_end=t_sample_end
+            t_end=t_sample_end,
         )
-        sample_times, x_test, y_test = build_repeated_noise_dataset(
-            sols_by_class=test_sols,
+
+        _, x_test = build_mpsk_feature_matrix(
+            sols=test_sols,
             K=K,
             t_start=t_sample_start,
-            t_end=t_sample_end
+            t_end=t_sample_end,
         )
 
-
-
-        mu, std = fit_standardizer(x_train)
-
-        x_train_n = transform_standardizer(x_train, mu, std)
-        x_test_n = transform_standardizer(x_test, mu, std)
-
-        pca = PCA(n_components=2)
-        X_train_pca = pca.fit_transform(x_train_n)
-        X_test_pca  = pca.transform(x_test_n)
-        plt.figure(figsize=(8, 7))
-
-        for c in np.unique(y_train):
-            idx_tr = (y_train == c)
-            idx_te = (y_test == c)
-
-            plt.scatter(
-                X_train_pca[idx_tr, 0],
-                X_train_pca[idx_tr, 1],
-                alpha=0.35,
-                s=25,
-                label=f"class {c} train"
-            )
-
-            plt.scatter(
-                X_test_pca[idx_te, 0],
-                X_test_pca[idx_te, 1],
-                marker="x",
-                s=35,
-                label=f"class {c} test"
-            )
-
-        plt.xlabel(f"PC1 ({100*pca.explained_variance_ratio_[0]:.1f}% variance)")
-        plt.ylabel(f"PC2 ({100*pca.explained_variance_ratio_[1]:.1f}% variance)")
-        plt.title(f"Train/Test PCA, K={K}")
-        plt.grid(True)
-        plt.legend()
-        plt.tight_layout()
-        plt.show()
-        
-        
-    
-        Wout = train_linear_readout(
-            x_train_n,
-            y_train,
-            n_classes=4,
-            ridge=1e-6
+        eval_result = evaluate_independent_classification(
+            X_train=x_train,
+            y_train=train_data.y,
+            X_test=x_test,
+            y_test=test_data.y,
+            ridge=RIDGE,
+            normalize=True,
+            n_classes=M,
         )
 
-        x_pred, x_scores = predict_linear_readout(
-            x_train_n,
-            Wout
-        )
-        y_pred, y_scores = predict_linear_readout(
-            x_test_n,
-            Wout
-        )
+        print(f"Train accuracy = {eval_result.train_accuracy:.2%}")
+        print(f"Test accuracy  = {eval_result.test_accuracy:.2%}")
+        print(eval_result.confusion_matrix)
 
-        train_acc = accuracy(y_train, x_pred)
-        test_acc = accuracy(y_test, y_pred)
+        print(f"Train symbol error rate = {eval_result.train_ser:.2%}")
+        print(f"Test symbol error rate  = {eval_result.test_ser:.2%}")
 
-        train_ser = symbol_error_rate(y_train, x_pred)
-        test_ser = symbol_error_rate(y_test, y_pred)
-
-        print(f"Train accuracy = {100*train_acc:.2f}%")
-        print(f"Test accuracy  = {100*test_acc:.2f}%")
-
-        print(confusion_matrix(y_test, y_pred))
-        print(f"Train symbol error rate = {100*train_ser:.2f}%")
-        print(f"Test symbol error rate  = {100*test_ser:.2f}%")
 
 if __name__=="__main__":
     main()

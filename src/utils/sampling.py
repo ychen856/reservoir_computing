@@ -35,7 +35,6 @@ def sample_reservoir_states(
     sampled = []
 
     for idx in state_indices:
-
         sampled.append(
             np.interp(
                 sample_times,

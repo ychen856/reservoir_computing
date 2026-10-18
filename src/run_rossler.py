@@ -1,5 +1,5 @@
 import numpy as np
-
+import matplotlib.pyplot as plt
 from src.circuits.pt_single import PTSingleReservoir
 from src.tasks.benchmarks.rossler import generate_rossler
 
@@ -167,6 +167,37 @@ def main():
     for r in results:
         print(f"{r['name']:30s} {r['dim']:5d} {r['y_test']:10.6f} {r['z_test']:10.6f} "
               f"{r['yr_test']:10.6f} {r['zr_test']:10.6f}")
+
+
+
+    # ============================================================
+    # Plot reservoir output in time domain
+    # ============================================================
+
+    t = sol.t * 1e6  # seconds -> us
+    v1 = sol.y[0]
+    v2 = sol.y[1]
+
+    # Only plot a short window
+    T_START = 0.0       # us
+    T_WINDOW = 0.05     # us
+
+    mask = (t >= T_START) & (t <= T_START + T_WINDOW)
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+
+    ax.plot(t[mask], v1[mask], label=r"$V_1(t)$", linewidth=1.5)
+    ax.plot(t[mask], v2[mask], label=r"$V_2(t)$", linewidth=1.5)
+
+    ax.set_xlabel("Time (µs)")
+    ax.set_ylabel("Voltage (V)")
+    ax.set_title("Rössler Task — Reservoir Output")
+
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
 
 
 if __name__ == '__main__':

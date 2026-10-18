@@ -74,7 +74,7 @@ def extract_temporal_voltage_feature(
         t_end,
         K,
     )
-
+    print('ssol: ', sol)
     feature = sample_reservoir_voltages(
         sol,
         sample_times,
@@ -131,7 +131,7 @@ def build_repeated_noise_dataset(
     for m, class_sols in enumerate(sols_by_class):
 
         for sol in class_sols:
-
+            print(sol)
             sample_times, feature = (
                 extract_temporal_voltage_feature(
                     sol=sol,
@@ -148,3 +148,45 @@ def build_repeated_noise_dataset(
     y = np.asarray(y)
 
     return sample_times, X, y
+
+
+def build_mpsk_feature_matrix(
+    sols,
+    K,
+    t_start,
+    t_end,
+):
+    """
+    Extract temporal voltage features from independent
+    MPSK reservoir simulations.
+
+    Parameters
+    ----------
+    sols : list[OdeResult]
+        One reservoir solution per trial.
+
+    Returns
+    -------
+    sample_times : ndarray, shape (K,)
+    X : ndarray, shape (N_trials, 2*K)
+    """
+
+    features = []
+
+    sample_times = np.linspace(
+        t_start,
+        t_end,
+        K,
+    )
+
+    for sol in sols:
+        feature = sample_reservoir_voltages(
+            sol,
+            sample_times,
+        )
+
+        features.append(feature.reshape(-1))
+
+    X = np.asarray(features)
+
+    return sample_times, X
