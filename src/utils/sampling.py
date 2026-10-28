@@ -14,6 +14,7 @@ def adc_zoh_input(t, t_start, dt_adc, u_adc_quant):
     return u_adc_quant[idx]  
 
 
+
 def sample_reservoir_states(
     sol,
     sample_times,

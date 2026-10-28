@@ -20,11 +20,11 @@ FC = 48e6
 
 Tc = 1.0 / FC
 
-N_CYCLES_PER_SYMBOL = 1/40
+N_CYCLES_PER_SYMBOL = 3.05 #1/2
 
 T_SYMBOL = N_CYCLES_PER_SYMBOL * Tc
 
-I_SCALE = 1e-2
+I_SCALE = 1e-4
 
 K = 8
 
@@ -53,6 +53,7 @@ result = simulate_continuous_task(
     k=K,
     amplitude_scale=I_SCALE,
     encoding="zoh",
+    solver='exact_zoh',
 )
 
 X = result.X
@@ -81,6 +82,16 @@ print(np.min(sol.y[1]), np.max(sol.y[1]))
 # ============================================================
 
 RIDGE = 1e-6
+
+print("\n=== Debug ===")
+print("Ts/Tc =", T_SYMBOL / Tc)
+print("I_SCALE =", I_SCALE)
+print("alpha =", reservoir.alpha)
+print("X shape =", result.X.shape)
+print("X min/max =", np.min(result.X), np.max(result.X))
+print("X std =", np.std(result.X, axis=0))
+print("y shape =", result.y.shape)
+print("y min/max =", np.min(result.y), np.max(result.y))
 
 eval_result = evaluate_continuous_regression(
     X=result.X,

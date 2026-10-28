@@ -3,7 +3,7 @@ from sklearn.preprocessing import PolynomialFeatures
 
 from src.circuits.pt_single import PTSingleReservoir
 from src.tasks.benchmarks.narma10 import generate_narma10
-from src.utils.encoding import sample_hold_input, carrier_encoded_input
+from src.utils.encoding import sample_hold_input, carrier_encoded_input, bipolar_input, masked_zoh_input
 from src.utils.features import extract_temporal_features
 from src.readout.ridge import train_ridge_regression, predict_ridge_regression
 from src.readout.metrics import nrmse
@@ -77,11 +77,11 @@ FC = 48e6
 
 Tc = 1.0 / FC
 
-N_CYCLES_PER_SYMBOL = 1/2
+N_CYCLES_PER_SYMBOL = 2.0 #1/2
 
 T_SYMBOL = N_CYCLES_PER_SYMBOL * Tc
 
-I_SCALE = 1e-2
+I_SCALE = 1e-3
 
 K = 8
 
@@ -113,10 +113,28 @@ n_symbols = len(u)
 # Encode input
 # ============================================================
 
-input_func = sample_hold_input(
+'''input_func = bipolar_input(
+    u,
+    symbol_period=T_SYMBOL,
+    amplitude_scale=I_SCALE,
+    mode='peak_matched'
+)'''
+'''input_func = sample_hold_input(
     u,
     symbol_period=T_SYMBOL,
     amplitude_scale=I_SCALE
+)'''
+#MASK = [1, -1]
+#MASK = [-1, 1]
+MASK = [1, -1, 1, -1]
+#MASK = [1, 1, -1, -1]
+M = len(MASK)
+
+input_func = masked_zoh_input(
+    sequence=u,
+    symbol_period=T_SYMBOL,
+    amplitude_scale=I_SCALE,
+    mask=MASK,
 )
 '''input_func = carrier_encoded_input(
     u,
@@ -153,13 +171,23 @@ print(f"t_eval points    = {len(t_eval)}")
 
 reservoir = PTSingleReservoir(
     eta=1.0,
-    alpha=2.78 #0.0 #2.78 #8.33
+    alpha=8.33 #0.0 #2.78 #8.33
 )
 
+
+'''sol = reservoir.simulate(
+    input_func=input_func,
+    t_span=(0.0, t_end),
+    t_eval=t_eval,
+    solver='exact_zoh',
+    symbol_period=T_SYMBOL,
+)'''
 sol = reservoir.simulate(
     input_func=input_func,
     t_span=(0.0, t_end),
-    t_eval=t_eval
+    t_eval=t_eval,
+    solver="exact_zoh",
+    symbol_period=T_SYMBOL / M,
 )
 
 
@@ -278,85 +306,4 @@ for name, result in results.items():
         f"Train={result['train_nrmse']:.6f} "
         f"Test={result['test_nrmse']:.6f}"
     )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-'''def memory_curve(X, u, washout, max_delay=20, ridge=1e-6):
-
-    results = []
-
-    for d in range(max_delay + 1):
-
-        start = max(washout, d)
-
-        X_d = X[start:]
-        y_d = u[start - d:len(u) - d]
-
-        n_train = int(TRAIN_RATIO * len(X_d))
-
-        X_train = X_d[:n_train]
-        X_test  = X_d[n_train:]
-
-        y_train = y_d[:n_train]
-        y_test  = y_d[n_train:]
-
-        # normalize X using training data
-        mu, std = fit_standardizer(X_train)
-
-        X_train_n = transform_standardizer(X_train, mu, std)
-        X_test_n = transform_standardizer(X_test, mu, std)
-
-        W = train_ridge_regression(
-            X_train_n,
-            y_train,
-            ridge=ridge
-        )
-
-        y_pred = predict_ridge_regression(
-            X_test_n,
-            W
-        )
-
-        ss_res = np.sum(
-            (y_test - y_pred)**2
-        )
-
-        ss_tot = np.sum(
-            (y_test - np.mean(y_test))**2
-        )
-
-        r2 = 1.0 - ss_res / ss_tot
-
-        results.append(r2)
-
-    return np.asarray(results)
-
-
-memory_r2 = memory_curve(
-    X,
-    u,
-    washout=WASHOUT,
-    max_delay=20,
-    ridge=RIDGE
-)
-
-print("\n=== Linear memory curve ===")
-
-for d, r2 in enumerate(memory_r2):
-    print(
-        f"delay={d:2d}: "
-        f"R^2={r2:.4f}"
-    )
-'''
 

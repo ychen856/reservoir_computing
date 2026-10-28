@@ -74,7 +74,6 @@ def extract_temporal_voltage_feature(
         t_end,
         K,
     )
-    print('ssol: ', sol)
     feature = sample_reservoir_voltages(
         sol,
         sample_times,
@@ -84,7 +83,7 @@ def extract_temporal_voltage_feature(
 
 
 
-def build_mpsk_feature_matrix(
+'''def build_mpsk_feature_matrix(
     sols,
     K,
     t_start,
@@ -110,7 +109,7 @@ def build_mpsk_feature_matrix(
 
     X = np.asarray(features)
 
-    return sample_times, X
+    return sample_times, X'''
 
 
 

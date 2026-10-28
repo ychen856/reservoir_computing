@@ -61,6 +61,7 @@ def simulate_continuous_task(
     amplitude_scale=1e-2,
     encoding="zoh",
     carrier_frequency=None,
+    solver="exact_zoh",
 ):
     """
     Continuous reservoir simulation.
@@ -127,20 +128,36 @@ def simulate_continuous_task(
 
     t_end = n_symbols * symbol_period
 
-    t_eval = np.arange(
+    '''t_eval = np.arange(
         0.0,
         t_end,
         dt,
+    )'''
+    t_eval = (
+        np.arange(
+            n_symbols * points_per_symbol
+        ) * dt
     )
 
     # --------------------------------------------------------
     # Reservoir simulation
     # --------------------------------------------------------
 
+    '''if solver == "auto":
+        solver = "exact_zoh" if encoding == "zoh" else "ivp"'''
+
+    if solver == "exact_zoh" and encoding != "zoh":
+        raise ValueError(
+            "ZOH solver requires ZOH input encoding"
+        )
+
+
     sol = reservoir.simulate(
         input_func=input_func,
         t_span=(0.0, t_end),
         t_eval=t_eval,
+        solver=solver,
+        symbol_period=symbol_period,
     )
 
     validate_solution(sol)
@@ -175,6 +192,7 @@ def simulate_continuous_task(
             "feature_dim": X.shape[1],
             "encoding": encoding,
             "amplitude_scale": amplitude_scale,
+            "solver": solver,
         },
     )
 
@@ -289,3 +307,32 @@ def simulate_independent_trials(
             "sample_times": sample_times,
         },
     )
+
+
+def extract_continuous_features(
+    simulation,
+    n_symbols,
+    symbol_period,
+    k,
+):
+    """
+    Re-extract temporal features from an existing
+    continuous reservoir simulation.
+
+    Does not rerun the ODE solver.
+    """
+
+    if k < 1:
+        raise ValueError("k must be >= 1")
+
+    if symbol_period <= 0:
+        raise ValueError("symbol_period must be positive")
+
+    X = extract_temporal_features(
+        sol=simulation.solutions,
+        n_symbols=n_symbols,
+        symbol_period=symbol_period,
+        k=k,
+    )
+
+    return X

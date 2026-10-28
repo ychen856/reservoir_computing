@@ -12,6 +12,7 @@ from src.readout.preprocessing import fit_standardizer, transform_standardizer
 from src.readout.metrics import accuracy, symbol_error_rate
 from src.simulation.runner import simulate_independent_trials
 from src.simulation.evaluation import evaluate_independent_classification
+from src.simulation.experiment import ExperimentConfig, ReadoutExperiment
 
 
 def main():
@@ -116,7 +117,7 @@ def main():
     t_sample_start = t_center
     t_sample_end = t_center + T_obs
 
-    K_list = [1, 2, 4, 8, 16, 32]
+    #K_list = [1, 2, 4, 8, 16, 32]
 
     # ============================================================
     # noise configuration
@@ -166,9 +167,7 @@ def main():
     )
     
 
-    #train_sols = simulate_mpsk_dataset(pt_reservoir, train_data)
-    #test_sols = simulate_mpsk_dataset(pt_reservoir, test_data)
-    train_result = simulate_independent_trials(
+    '''train_result = simulate_independent_trials(
         reservoir=pt_reservoir,
         task_data=train_data,
         extract_features=False,
@@ -181,7 +180,7 @@ def main():
     )
 
     train_sols = train_result.solutions
-    test_sols = test_result.solutions
+    test_sols = test_result.solutions'''
 
 
     mod_name = {
@@ -201,7 +200,7 @@ def main():
     print("\n=== Repeated-noise temporal sampling sweep ===")
     RIDGE = 1e-6
 
-    for K in K_list:
+    '''for K in K_list:
 
         print("k: ", K)
 
@@ -234,7 +233,85 @@ def main():
         print(eval_result.confusion_matrix)
 
         print(f"Train symbol error rate = {eval_result.train_ser:.2%}")
-        print(f"Test symbol error rate  = {eval_result.test_ser:.2%}")
+        print(f"Test symbol error rate  = {eval_result.test_ser:.2%}")'''
+
+
+
+
+
+
+
+
+
+    config = ExperimentConfig(
+        evaluation_type="classification",
+        k=8,
+        ridge=RIDGE,
+        normalize=True,
+        n_classes=M,
+        t_start=t_sample_start,
+        t_end=t_sample_end,
+    )
+
+    experiment = ReadoutExperiment(
+        reservoir=pt_reservoir,
+        task_data=train_data,
+        test_data=test_data,
+        config=config,
+        reservoir_name="PT Single",
+    )
+
+    # ============================================================
+    # Run reservoir simulation only once
+    # ============================================================
+
+    simulation = experiment.simulate()
+
+    # ============================================================
+    # Sweep temporal nodes
+    # ============================================================
+
+    '''K_LIST = [1, 2, 4, 8, 16, 32]
+
+    for K in K_LIST:
+
+        result = experiment.evaluate(
+            simulation=simulation,
+            k=K,
+        )
+
+        ev = result.evaluation
+
+        print(f"\nK = {K}")
+        print(f"Feature dim   : {ev.feature_dim}")
+        print(f"Train accuracy: {ev.train_accuracy:.2%}")
+        print(f"Test accuracy : {ev.test_accuracy:.2%}")
+        print(ev.confusion_matrix)'''
+
+    for K in [1, 2, 4, 8, 16, 32]:
+        for ridge in [1e-8, 1e-6, 1e-4]:
+
+            result = experiment.evaluate(
+                simulation=simulation,
+                k=K,
+                ridge=ridge,
+            )
+
+            print(
+                K,
+                ridge,
+                result.evaluation.test_accuracy,
+            )
+            ev = result.evaluation
+            
+            print(
+                f"K={K:2d} | "
+                f"ridge={ridge:.0e} | "
+                f"dim={ev.feature_dim:2d} | "
+                f"train={ev.train_accuracy:.2%} | "
+                f"test={ev.test_accuracy:.2%}"
+            )
+
 
 
 if __name__=="__main__":

@@ -21,15 +21,15 @@ TRAIN_RATIO = 0.8
 FC = 48e6
 Tc = 1.0 / FC
 
-N_CYCLES_PER_SYMBOL = 1 / 2
+N_CYCLES_PER_SYMBOL = 10.0 #1 / 2
 T_SYMBOL = N_CYCLES_PER_SYMBOL * Tc
 
-I_SCALE = 1e-2
+I_SCALE = 1e-4
 K = 8
 POINTS_PER_SYMBOL = 16
 
 RIDGE = 1e-6
-ALPHA = 2.78
+ALPHA = 8.33 #2.78
 
 HENON_A = 1.4
 HENON_B = 0.3
@@ -126,10 +126,19 @@ reservoir = PTSingleReservoir(
     alpha=ALPHA,
 )
 
+'''sol = reservoir.simulate(
+    input_func=input_func,
+    t_span=(0.0, t_end),
+    t_eval=t_eval,
+    solver="exact_zoh",
+)'''
+
 sol = reservoir.simulate(
     input_func=input_func,
     t_span=(0.0, t_end),
     t_eval=t_eval,
+    solver='exact_zoh',
+    symbol_period=T_SYMBOL,
 )
 
 X = extract_temporal_features(

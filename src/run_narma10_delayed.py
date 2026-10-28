@@ -1,10 +1,11 @@
 import numpy as np
 
 from src.circuits.pt_single import PTSingleReservoir
-from src.tasks.narma10 import generate_narma10
-from src.utils.task_encoding import sample_hold_input
-from src.utils.task_features import normalize_train_test
-from src.readout.ridge import train_ridge_regression, predict_ridge_regression, nrmse
+from src.tasks.benchmarks.narma10 import generate_narma10
+from src.utils.encoding import sample_hold_input
+from src.readout.ridge import train_ridge_regression, predict_ridge_regression
+from src.readout.metrics import nrmse
+from src.readout.preprocessing import fit_standardizer, transform_standardizer
 
 
 def extract_temporal_features_delayed(
@@ -197,18 +198,10 @@ y_test = y_eval[n_train:]
 # Normalize using training set only
 # ============================================================
 
-X_train_n, X_test_n = normalize_train_test(
-    X_train,
-    X_test
-)
+mu, std = fit_standardizer(X_train)
 
-'''mu = X_train.mean(axis=0)
-std = X_train.std(axis=0)
-
-std[std < 1e-12] = 1.0
-
-X_train_n = (X_train - mu) / std
-X_test_n = (X_test - mu) / std'''
+X_train_n = transform_standardizer(X_train, mu, std)
+X_test_n = transform_standardizer(X_test, mu, std)
 
 
 # ============================================================
@@ -289,17 +282,11 @@ def memory_curve(X, u, washout, max_delay=20, ridge=1e-6):
         y_test  = y_d[n_train:]
 
         # normalize X using training data
-        X_train_n, X_test_n = normalize_train_test(
-            X_train,
-            X_test
-        )
-        '''mu = X_train.mean(axis=0)
-        std = X_train.std(axis=0)
+        mu, std = fit_standardizer(X_train)
 
-        std[std < 1e-12] = 1.0
+        X_train_n = transform_standardizer(X_train, mu, std)
+        X_test_n = transform_standardizer(X_test, mu, std)
 
-        X_train_n = (X_train - mu) / std
-        X_test_n = (X_test - mu) / std'''
 
         W = train_ridge_regression(
             X_train_n,
@@ -364,10 +351,11 @@ n_train = int(0.8 * len(X_input))
 X_input_train = X_input[:n_train]
 X_input_test  = X_input[n_train:]
 
-X_input_train, X_input_test = normalize_train_test(
-    X_input_train,
-    X_input_test
-)
+
+mu, std = fit_standardizer(X_input_train)
+
+X_input_train = transform_standardizer(X_input_train, mu, std)
+X_input_test = transform_standardizer(X_input_test, mu, std)
 
 
 y_train = y[WASHOUT + 1:][:n_train]
@@ -426,10 +414,12 @@ X_input_test  = X_input[n_train:]
 y_train = y[WASHOUT + 1:][:n_train]
 y_test  = y[WASHOUT + 1:][n_train:]
 
-X_input_train, X_input_test = normalize_train_test(
-    X_input_train,
-    X_input_test
-)
+
+mu, std = fit_standardizer(X_input_train)
+
+X_input_train = transform_standardizer(X_input_train, mu, std)
+X_input_test = transform_standardizer(X_input_test, mu, std)
+
 
 W_input = train_ridge_regression(
     X_input_train,
@@ -490,10 +480,11 @@ X_input_test  = X_input[n_train:]
 y_train = y[WASHOUT + 1:][:n_train]
 y_test  = y[WASHOUT + 1:][n_train:]
 
-X_input_train, X_input_test = normalize_train_test(
-    X_input_train,
-    X_input_test
-)
+
+mu, std = fit_standardizer(X_input_train)
+
+X_input_train = transform_standardizer(X_input_train, mu, std)
+X_input_test = transform_standardizer(X_input_test, mu, std)
 
 W_input = train_ridge_regression(
     X_input_train,
@@ -543,10 +534,10 @@ X_input_test  = X_input[n_train:]
 y_train = y_input[:n_train]
 y_test  = y_input[n_train:]
 
-X_input_train, X_input_test = normalize_train_test(
-            X_input_train,
-            X_input_test
-        )
+mu, std = fit_standardizer(X_input_train)
+
+X_input_train = transform_standardizer(X_input_train, mu, std)
+X_input_test = transform_standardizer(X_input_test, mu, std)
 
 W_input = train_ridge_regression(
     X_input_train,

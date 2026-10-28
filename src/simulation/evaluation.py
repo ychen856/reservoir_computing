@@ -12,8 +12,9 @@ from src.readout.preprocessing import (
     transform_standardizer,
 )
 
-from src.readout.metrics import nrmse
+from src.readout.metrics import nrmse, pearson_r
 from src.tasks.applications.pam4 import quantize_pam4_class
+
 
 
 # ============================================================
@@ -25,6 +26,12 @@ class RegressionResult:
 
     train_nrmse: float
     test_nrmse: float
+
+    train_nrmse_per_output: np.ndarray
+    test_nrmse_per_output: np.ndarray
+    
+    train_r_per_output: np.ndarray
+    test_r_per_output: np.ndarray
 
     y_train: np.ndarray
     y_test: np.ndarray
@@ -218,6 +225,39 @@ def evaluate_continuous_regression(
         y_test_pred,
     )
 
+    # ============================================================
+    # Per-output metrics
+    # ============================================================
+
+    Y_train_2d = np.asarray(y_train).reshape(len(y_train), -1)
+    Y_test_2d = np.asarray(y_test).reshape(len(y_test), -1)
+
+    P_train_2d = np.asarray(y_train_pred).reshape(len(y_train), -1)
+    P_test_2d = np.asarray(y_test_pred).reshape(len(y_test), -1)
+
+    n_outputs = Y_train_2d.shape[1]
+
+    train_nrmse_per_output = np.array([
+        nrmse(Y_train_2d[:, j], P_train_2d[:, j])
+        for j in range(n_outputs)
+    ])
+
+    test_nrmse_per_output = np.array([
+        nrmse(Y_test_2d[:, j], P_test_2d[:, j])
+        for j in range(n_outputs)
+    ])
+
+    train_r_per_output = np.array([
+        pearson_r(Y_train_2d[:, j], P_train_2d[:, j])
+        for j in range(n_outputs)
+    ])
+
+    test_r_per_output = np.array([
+        pearson_r(Y_test_2d[:, j], P_test_2d[:, j])
+        for j in range(n_outputs)
+    ])
+    
+
     # --------------------------------------------------------
     # Return
     # --------------------------------------------------------
@@ -225,6 +265,12 @@ def evaluate_continuous_regression(
     return RegressionResult(
         train_nrmse=float(train_nrmse),
         test_nrmse=float(test_nrmse),
+
+        train_nrmse_per_output=train_nrmse_per_output,
+        test_nrmse_per_output=test_nrmse_per_output,
+
+        train_r_per_output=train_r_per_output,
+        test_r_per_output=test_r_per_output,
 
         y_train=y_train,
         y_test=y_test,

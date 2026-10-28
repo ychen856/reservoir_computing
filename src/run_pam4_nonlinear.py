@@ -2,15 +2,9 @@ import numpy as np
 
 from src.circuits.pt_single import PTSingleReservoir
 from src.tasks.applications.pam4_nonlinear import generate_pam4_nonlinear_task
-from src.tasks.applications.pam4 import quantize_pam4_class
-from src.utils.encoding import sample_hold_input
-from src.utils.features import extract_temporal_features
-from src.readout.ridge import train_ridge_regression, predict_ridge_regression
-from src.readout.metrics import nrmse
-from src.readout.preprocessing import fit_standardizer, transform_standardizer
-from src.readout.metrics import accuracy, symbol_error_rate
 from src.simulation.runner import simulate_continuous_task
 from src.simulation.evaluation import evaluate_scalar_classification
+from src.simulation.experiment import ExperimentConfig, ReadoutExperiment
 
 # ============================================================
 # Configuration
@@ -153,46 +147,12 @@ start = max(task_data.washout, channel_radius)
 stop = n_symbols - channel_radius       # Python-exclusive
 indices = np.arange(start, stop)
 
-'''y_eval = y[indices]
-X_pt = X[indices]
-X_current = u[indices].reshape(-1, 1)'''
-
-
-
-
-'''# Build [u[n-2], u[n-1], u[n], u[n+1], u[n+2]] directly at the same n.
-X_5tap = np.column_stack([
-    u[indices - 2],
-    u[indices - 1],
-    u[indices],
-    u[indices + 1],
-    u[indices + 2],
-])
-
-n_train = int(task_data.train_ratio * len(indices))'''
-
-'''y_train = y_eval[:n_train]
-y_test = y_eval[n_train:]'''
-
-'''print("\n=== Common evaluation set ===")
-print(f"Valid symbol range : [{start}, {stop - 1}]")
-print(f"Samples            : {len(y_eval)}")
-print(f"Train samples      : {len(y_train)}")
-print(f"Test samples       : {len(y_test)}")
-print(f"Ridge              : {RIDGE:.1e}")'''
 
 
 # ============================================================
 # 1) Current received-sample baseline: u[n] only
 # ============================================================
 
-'''result_current = evaluate_ridge(
-    X_current[:n_train],
-    X_current[n_train:],
-    y_train,
-    y_test,
-    ridge=RIDGE,
-)'''
 X_current = u.reshape(-1, 1)
 
 result_current = evaluate_scalar_classification(
@@ -213,13 +173,6 @@ result_current = evaluate_scalar_classification(
 #    [u[n-2], u[n-1], u[n], u[n+1], u[n+2]] -> class[n]
 # ============================================================
 
-'''result_5tap = evaluate_ridge(
-    X_5tap[:n_train],
-    X_5tap[n_train:],
-    y_train,
-    y_test,
-    ridge=RIDGE,
-)'''
 
 X_5tap = np.zeros(
     (n_symbols, 5),
@@ -249,13 +202,6 @@ result_5tap = evaluate_scalar_classification(
 # 3) PT Single reservoir: 16D temporal state
 # ============================================================
 
-'''result_pt = evaluate_ridge(
-    X_pt[:n_train],
-    X_pt[n_train:],
-    y_train,
-    y_test,
-    ridge=RIDGE,
-)'''
 
 result_pt = evaluate_scalar_classification(
     X=X,
@@ -273,44 +219,6 @@ result_pt = evaluate_scalar_classification(
 # Results
 # ============================================================
 
-'''print("\n" + "=" * 60)
-print("PAM4 NONLINEAR-CHANNEL BENCHMARK")
-print("=" * 60)
-print(f"Reservoir          : PT Single")
-print(f"alpha              : {ALPHA}")
-print(f"T_symbol / Tc      : {N_CYCLES_PER_SYMBOL}")
-print(f"I_scale            : {I_SCALE:.3e} A")
-print(f"K                  : {K}")
-print(f"nonlinear channel  : ON")
-print(f"AWGN               : {'ON' if ADD_AWGN else 'OFF'}")
-if ADD_AWGN:
-    print(f"SNR                 : {SNR_DB:.2f} dB")
-
-print_result("Current received sample u[n]", X_current.shape[1], result_current)
-print_result("5-tap linear equalizer", X_5tap.shape[1], result_5tap)
-print_result("PT Single reservoir", X_pt.shape[1], result_pt)
-
-print("\n=== Test summary ===")
-print(f"{'Method':<28} {'Dim':>5} {'NRMSE':>10} {'Accuracy':>12} {'SER':>12}")
-print("-" * 72)
-print(
-    f"{'u[n] only':<28} {X_current.shape[1]:>5d} "
-    f"{result_current['test_nrmse']:>10.6f} "
-    f"{result_current['test_acc']:>11.2%} "
-    f"{result_current['test_ser']:>12.4e}"
-)
-print(
-    f"{'5-tap equalizer':<28} {X_5tap.shape[1]:>5d} "
-    f"{result_5tap['test_nrmse']:>10.6f} "
-    f"{result_5tap['test_acc']:>11.2%} "
-    f"{result_5tap['test_ser']:>12.4e}"
-)
-print(
-    f"{'PT Single':<28} {X_pt.shape[1]:>5d} "
-    f"{result_pt['test_nrmse']:>10.6f} "
-    f"{result_pt['test_acc']:>11.2%} "
-    f"{result_pt['test_ser']:>12.4e}"
-)'''
 def print_result(name, result):
 
     print(f"\n=== {name} ===")
@@ -366,3 +274,135 @@ for name, result in [
         f"{result.test_accuracy:>11.2%} "
         f"{result.test_ser:>12.4e}"
     )
+
+
+
+
+
+
+
+
+# ============================================================
+# Common Experiment Configuration
+# ============================================================
+
+config = ExperimentConfig(
+    symbol_period=T_SYMBOL,
+    points_per_symbol=POINTS_PER_SYMBOL,
+    k=K,
+    amplitude_scale=I_SCALE,
+    encoding="zoh",
+
+    ridge=RIDGE,
+    normalize=True,
+
+    evaluation_type="scalar_classification",
+
+    valid_start=WASHOUT,
+    valid_stop=N_SYMBOLS - CHANNEL_RADIUS,
+
+    n_classes=4,
+)
+
+
+experiment = ReadoutExperiment(
+    reservoir=reservoir,
+    task_data=task_data,
+    config=config,
+    reservoir_name="PT Single",
+)
+
+# ============================================================
+# Reservoir simulation
+# ============================================================
+
+#simulation = experiment.simulate()
+simulation = sim_result
+
+# ============================================================
+# Readout evaluation
+# ============================================================
+
+result = experiment.evaluate(
+    simulation=simulation,
+    k=K,
+    ridge=RIDGE,
+)
+
+ev = result.evaluation
+
+print("\n=== PAM4 Nonlinear: Common Experiment ===")
+
+print(f"Feature dimension: {ev.feature_dim}")
+print(f"Train samples    : {ev.n_train}")
+print(f"Test samples     : {ev.n_test}")
+
+print(f"Train NRMSE      : {ev.train_nrmse:.6f}")
+print(f"Test NRMSE       : {ev.test_nrmse:.6f}")
+
+print(f"Train accuracy   : {ev.train_accuracy:.4%}")
+print(f"Test accuracy    : {ev.test_accuracy:.4%}")
+
+print(f"Train SER        : {ev.train_ser:.6f}")
+print(f"Test SER         : {ev.test_ser:.6f}")
+
+print("\nConfusion matrix:")
+print(ev.confusion_matrix)
+
+
+# ============================================================
+# Regression check
+# ============================================================
+
+
+np.testing.assert_allclose(
+    [
+        ev.train_nrmse,
+        ev.test_nrmse,
+        ev.train_accuracy,
+        ev.test_accuracy,
+    ],
+    [
+        result_pt.train_nrmse,
+        result_pt.test_nrmse,
+        result_pt.train_accuracy,
+        result_pt.test_accuracy,
+    ],
+    rtol=1e-10,
+    atol=1e-10,
+)
+
+assert ev.feature_dim == 16
+assert ev.n_train == 2238
+assert ev.n_test == 560
+
+print("\nRegression check: PASS")
+
+
+# ============================================================
+# K sweep
+# ============================================================
+
+K_LIST = [4, 8, 16]
+
+for K_eval in K_LIST:
+
+    result = experiment.evaluate(
+        simulation=simulation,
+        k=K_eval,
+        ridge=RIDGE,
+    )
+
+    ev = result.evaluation
+
+    assert ev.feature_dim == 2 * K_eval
+
+    print(
+        f"K={K_eval:2d} | "
+        f"dim={ev.feature_dim:2d} | "
+        f"Train acc={ev.train_accuracy:.4%} | "
+        f"Test acc={ev.test_accuracy:.4%} | "
+        f"Test NRMSE={ev.test_nrmse:.6f}"
+    )
+
+

@@ -1,5 +1,7 @@
 import numpy as np
 from scipy.integrate import solve_ivp
+from scipy.linalg import expm
+from types import SimpleNamespace
 
 class pt_reservoir_tank:
     def __init__(self):
@@ -175,7 +177,7 @@ class PTSingleReservoir:
         input_func,
         t_span,
         t_eval,
-        x0=None
+        x0=None,
     ):
         if x0 is None:
             x0 = np.zeros(4)
@@ -191,12 +193,127 @@ class PTSingleReservoir:
             t_span,
             x0,
             t_eval=t_eval,
+            method="DOP853",
             rtol=1e-8,
             atol=1e-11
         )
 
+        if not sol.success:
+            raise RuntimeError(
+                f"Nonlinear simulation failed: {sol.message}"
+            )
+
         return sol
 
+    def simulate_nonlinear_zoh(
+        self,
+        input_func,
+        t_span,
+        t_eval,
+        x0=None,
+        symbol_period=None,
+    ):
+        """
+        Piecewise DOP853 integration for nonlinear PT
+        with zero-order-hold input.
+        """
+
+        if symbol_period is None or symbol_period <= 0:
+            raise ValueError("Valid symbol_period is required")
+
+
+
+        if x0 is None:
+            x0 = np.zeros(4)
+
+        t_eval = np.asarray(t_eval, dtype=float)
+
+        t_start, t_end = t_span
+
+        n_symbols = int(round(
+            (t_end - t_start) / symbol_period
+        ))
+
+        if not np.isclose(
+            t_start + n_symbols * symbol_period,
+            t_end,
+            rtol=1e-9,
+            atol=1e-15
+        ):
+            raise ValueError(
+                "Simulation duration must be a multiple of symbol_period"
+            )
+
+        if t_eval.ndim != 1:
+            raise ValueError("t_eval must be one-dimensional")
+        
+        if len(t_eval) == 0:
+            raise ValueError("t_eval cannot be empty")
+        
+        if np.any(np.diff(t_eval) <= 0):
+            raise ValueError("t_eval must be strictly increasing")
+        
+        if t_eval[0] < t_start or t_eval[-1] >= t_end:
+            raise ValueError(
+                "t_eval must lie within [t_start, t_end)"
+            )
+
+        states = np.empty((4, len(t_eval)), dtype=float)
+        x = np.asarray(x0, dtype=float).copy()
+
+        for n in range(n_symbols):
+
+            a = t_start + n * symbol_period
+            b = t_start + (n + 1) * symbol_period
+
+            # Hold input constant within this symbol.
+            u_n = float(input_func(0.5 * (a + b)))
+
+            def rhs(t, state):
+                return self.tank.nonlinear_rhs(
+                    t,
+                    state,
+                    self.eta,
+                    self.alpha,
+                    lambda _: u_n
+                )
+
+            # Select output samples belonging to this symbol.
+            i0 = np.searchsorted(t_eval, a, side="left")
+            i1 = np.searchsorted(t_eval, b, side="left")
+
+            local_times = t_eval[i0:i1]
+
+            # Dense output avoids requiring t_eval to include
+            # the right boundary of every symbol.
+            sol = solve_ivp(
+                rhs,
+                (a, b),
+                x,
+                method="DOP853",
+                dense_output=True,
+                rtol=1e-8,
+                atol=1e-11,
+            )
+
+            if not sol.success:
+                raise RuntimeError(
+                    f"ZOH integration failed at symbol {n}: "
+                    f"{sol.message}"
+                )
+
+            if len(local_times):
+                states[:, i0:i1] = sol.sol(local_times)
+
+            # Pass the final state to the next symbol.
+            x = sol.y[:, -1].copy()
+
+        return SimpleNamespace(
+            t=t_eval,
+            y=states,
+            success=True,
+            message="Piecewise nonlinear ZOH completed",
+        )
 
     '''def simulate_history(self, t_end, t_eval, input_func):
         """
@@ -257,10 +374,167 @@ class PTSingleReservoir:
             atol=1e-12
         )
 
+        '''if not sol.success:
+            raise RuntimeError(sol.message)'''
         if not sol.success:
+
+            t_fail = sol.t[-1]
+
+            fc = 48e6
+            tc = 1.0 / fc
+            ts = tc * 0.5
+
+            symbol_position = t_fail / ts
+            nearest_boundary = round(symbol_position)
+
+            boundary_time = nearest_boundary * ts
+
+            print("\n[Linear solver failure]")
+
+            print("Message:", sol.message)
+
+            print("Last returned time:", t_fail)
+
+            print("Symbol position:", symbol_position)
+
+            print("Nearest symbol index:", nearest_boundary)
+
+            print(
+                "Distance to nearest symbol boundary:",
+                abs(t_fail - boundary_time),
+            )
+
+            print("Last state:", sol.y[:, -1])
+
+            print(
+                "Max absolute state:",
+                np.max(np.abs(sol.y)),
+            )
+
             raise RuntimeError(sol.message)
 
         return sol
+
+
+    def simulate_linear_zoh(
+        self,
+        input_func,
+        t_span,
+        t_eval,
+        x0=None,
+        symbol_period=None,
+    ):
+        """
+        Exact ZOH integration for the linear PT reservoir.
+
+        dx/dt = A x + B u(t)
+
+        Assumptions:
+            1. alpha == 0
+            2. Input is constant within each symbol period
+            3. t_eval is uniformly spaced
+            4. t_span starts at zero
+        """
+
+        if self.alpha != 0.0:
+            raise ValueError(
+                "Exact ZOH integration requires alpha=0"
+            )
+
+        if symbol_period is None:
+            raise ValueError(
+                "symbol_period is required for exact ZOH"
+            )
+
+        t_eval = np.asarray(t_eval, dtype=float)
+
+        if len(t_eval) < 2:
+            raise ValueError(
+                "t_eval must contain at least two points"
+            )
+
+        if not np.isclose(t_span[0], 0.0, atol=1e-15):
+            raise ValueError(
+                "Exact ZOH currently requires t_span[0]=0"
+            )
+
+        if x0 is None:
+            x0 = np.zeros(4)
+
+        A = self.tank.build_state_matrix(self.eta)
+        B = self.tank.build_input_vector()
+
+        n_states = A.shape[0]
+
+        B = np.asarray(B).reshape(n_states, 1)
+
+        dt = t_eval[1] - t_eval[0]
+
+        if not np.allclose(
+            np.diff(t_eval),
+            dt,
+            rtol=1e-8,
+            atol=1e-15,
+        ):
+            raise ValueError(
+                "Exact ZOH requires uniformly spaced t_eval"
+            )
+
+        points_per_symbol = int(
+            round(symbol_period / dt)
+        )
+
+        if not np.isclose(
+            points_per_symbol * dt,
+            symbol_period,
+            rtol=1e-8,
+            atol=1e-15,
+        ):
+            raise ValueError(
+                "symbol_period must be an integer multiple of dt"
+            )
+
+        # --------------------------------------------------
+        # Exact state transition
+        # --------------------------------------------------
+
+        M = np.zeros((n_states + 1, n_states + 1))
+
+        M[:n_states, :n_states] = A
+        M[:n_states, n_states:] = B
+
+        E = expm(M * dt)
+
+        Phi = E[:n_states, :n_states]
+        Gamma = E[:n_states, n_states]
+
+        # --------------------------------------------------
+        # Simulation
+        # --------------------------------------------------
+
+        states = np.zeros(
+            (n_states, len(t_eval)),
+            dtype=float,
+        )
+
+        x = np.asarray(x0, dtype=float).copy()
+
+        for i, t in enumerate(t_eval):
+
+            states[:, i] = x
+
+            # Evaluate at the center of the current step.
+            # This avoids ambiguity exactly at a ZOH boundary.
+            u = input_func(t + 0.5 * dt)
+
+            x = Phi @ x + Gamma * u
+
+        return SimpleNamespace(
+            t=t_eval,
+            y=states,
+            success=True,
+            message="Exact ZOH integration completed",
+        )
 
 
     
@@ -269,19 +543,47 @@ class PTSingleReservoir:
         input_func,
         t_span,
         t_eval,
-        x0=None
+        x0=None,
+        solver='ivp',
+        symbol_period=None,
     ):
-        if self.alpha == 0.0:
-            return self.simulate_linear(
+        print(
+            f"[PTSingleReservoir] "
+            f"eta={self.eta}, "
+            f"alpha={self.alpha}, "
+            f"solver={solver}"
+        )
+        if solver == 'exact_zoh':
+            if self.alpha == 0.0:
+                return self.simulate_linear_zoh(
+                    input_func=input_func,
+                    t_span=t_span,
+                    t_eval=t_eval,
+                    x0=x0,
+                    symbol_period=symbol_period,
+                )
+            return self.simulate_nonlinear_zoh(
+                input_func=input_func,
+                t_span=t_span,
+                t_eval=t_eval,
+                x0=x0,
+                symbol_period=symbol_period,
+            )
+            
+        elif solver == 'ivp':
+            if self.alpha == 0.0:
+                return self.simulate_linear(
+                    input_func=input_func,
+                    t_span=t_span,
+                    t_eval=t_eval,
+                    x0=x0
+                )
+
+            return self.simulate_nonlinear(
                 input_func=input_func,
                 t_span=t_span,
                 t_eval=t_eval,
                 x0=x0
             )
-
-        return self.simulate_nonlinear(
-            input_func=input_func,
-            t_span=t_span,
-            t_eval=t_eval,
-            x0=x0
-        )
+        else:
+            raise ValueError(f"Unknown solver: {solver}")
