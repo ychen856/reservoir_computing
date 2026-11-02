@@ -6,6 +6,7 @@ from typing import Any, Optional
 from src.utils.encoding import (
     sample_hold_input,
     carrier_encoded_input,
+    pulse_encoded_input,
 )
 
 from src.utils.features import (
@@ -62,6 +63,8 @@ def simulate_continuous_task(
     encoding="zoh",
     carrier_frequency=None,
     solver="exact_zoh",
+    pulse_duty = 1.0,
+    reset_phase=False,
 ):
     """
     Continuous reservoir simulation.
@@ -112,6 +115,15 @@ def simulate_continuous_task(
             symbol_period=symbol_period,
             carrier_frequency=carrier_frequency,
             amplitude_scale=amplitude_scale,
+            reset_phase=reset_phase,
+        )
+
+    elif encoding == 'pulse':
+        input_func = pulse_encoded_input(
+            u,
+            symbol_period=symbol_period,
+            amplitude_scale=amplitude_scale,
+            duty_cycle=pulse_duty,
         )
 
     else:
@@ -146,7 +158,7 @@ def simulate_continuous_task(
     '''if solver == "auto":
         solver = "exact_zoh" if encoding == "zoh" else "ivp"'''
 
-    if solver == "exact_zoh" and encoding != "zoh":
+    if solver == "exact_zoh" and (encoding != "zoh" and encoding != 'pulse'):
         raise ValueError(
             "ZOH solver requires ZOH input encoding"
         )
@@ -158,6 +170,7 @@ def simulate_continuous_task(
         t_eval=t_eval,
         solver=solver,
         symbol_period=symbol_period,
+        pulse_duty=pulse_duty,
     )
 
     validate_solution(sol)
@@ -193,6 +206,7 @@ def simulate_continuous_task(
             "encoding": encoding,
             "amplitude_scale": amplitude_scale,
             "solver": solver,
+            'pulse_duty' : (pulse_duty if encoding == "pulse" else None),
         },
     )
 

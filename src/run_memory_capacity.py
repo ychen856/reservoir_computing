@@ -84,7 +84,7 @@ def main():
     # ========================================================
 
     reservoir = PTSingleReservoir(
-        eta=1.0,
+        eta=1.1,
         alpha=8.33,
     )
 

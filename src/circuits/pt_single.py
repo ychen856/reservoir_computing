@@ -212,6 +212,7 @@ class PTSingleReservoir:
         t_eval,
         x0=None,
         symbol_period=None,
+        pulse_duty=1.0,
     ):
         """
         Piecewise DOP853 integration for nonlinear PT
@@ -221,7 +222,10 @@ class PTSingleReservoir:
         if symbol_period is None or symbol_period <= 0:
             raise ValueError("Valid symbol_period is required")
 
-
+        if not (0.0 < pulse_duty <= 1.0):
+            raise ValueError(
+                "pulse_duty must be in (0, 1]"
+            )
 
         if x0 is None:
             x0 = np.zeros(4)
@@ -261,7 +265,7 @@ class PTSingleReservoir:
         states = np.empty((4, len(t_eval)), dtype=float)
         x = np.asarray(x0, dtype=float).copy()
 
-        for n in range(n_symbols):
+        '''for n in range(n_symbols):
 
             a = t_start + n * symbol_period
             b = t_start + (n + 1) * symbol_period
@@ -306,7 +310,70 @@ class PTSingleReservoir:
                 states[:, i0:i1] = sol.sol(local_times)
 
             # Pass the final state to the next symbol.
-            x = sol.y[:, -1].copy()
+            x = sol.y[:, -1].copy()'''
+        for n in range(n_symbols):
+
+            a = t_start + n * symbol_period
+            b = t_start + (n + 1) * symbol_period
+
+            transition = a + pulse_duty * symbol_period
+
+            intervals = [
+                (a, transition),
+                (transition, b),
+            ]
+
+            for left, right in intervals:
+                if right <= left:
+                    continue
+
+                u_segment = float(
+                    input_func(0.5 * (left + right))
+                )
+
+                def rhs(t, state):
+                    return self.tank.nonlinear_rhs(
+                        t,
+                        state,
+                        self.eta,
+                        self.alpha,
+                        lambda _: u_segment,
+                    )
+
+                i0 = np.searchsorted(
+                    t_eval,
+                    left,
+                    side="left",
+                )
+
+                i1 = np.searchsorted(
+                    t_eval,
+                    right,
+                    side="left",
+                )
+
+                local_times = t_eval[i0:i1]
+
+                sol = solve_ivp(
+                    rhs,
+                    (left, right),
+                    x,
+                    method="DOP853",
+                    dense_output=True,
+                    rtol=1e-8,
+                    atol=1e-11,
+                )
+
+                if not sol.success:
+                    raise RuntimeError(
+                        f"Integration failed at symbol {n}"
+                    )
+
+                if len(local_times):
+                    states[:, i0:i1] = sol.sol(local_times)
+
+                x = sol.y[:, -1].copy()
+
 
         return SimpleNamespace(
             t=t_eval,
@@ -546,6 +613,7 @@ class PTSingleReservoir:
         x0=None,
         solver='ivp',
         symbol_period=None,
+        pulse_duty=1.0,
     ):
         print(
             f"[PTSingleReservoir] "
@@ -568,6 +636,7 @@ class PTSingleReservoir:
                 t_eval=t_eval,
                 x0=x0,
                 symbol_period=symbol_period,
+                pulse_duty=pulse_duty,
             )
             
         elif solver == 'ivp':

@@ -19,7 +19,7 @@ from types import SimpleNamespace
 FC = 48e6
 TS_RATIO = 0.5
 SYMBOL_PERIOD = TS_RATIO / FC
-ETA = 1.0
+ETA = 1.1
 ALPHA = 8.33
 INPUT_SCALE = 1e-4
 N_SYMBOLS = 3000

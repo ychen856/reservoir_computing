@@ -3,6 +3,7 @@ from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.metrics import confusion_matrix
+import csv
 
 from src.circuits.pt_single import PTSingleReservoir
 from src.tasks.applications.mpsk import simulate_mpsk_dataset, generate_mpsk_task
@@ -26,7 +27,10 @@ def main():
     N_TRAIN_REPEAT = 300
     N_TEST_REPEAT = 200
 
-    M = 4
+    M = 32
+
+    ETA = 0.0
+    ALPHA = 8.33
 
     # Start close to the PT-RLC resonance
     fc = 48.0e6                 # carrier frequency [Hz]
@@ -37,7 +41,7 @@ def main():
 
 
     # Pulse amplitude
-    Iin_peak = 1.0e-2           # A
+    Iin_peak = 1.0e-4          # A
 
 
     # ============================================================
@@ -116,7 +120,7 @@ def main():
 
     t_sample_start = t_center
     t_sample_end = t_center + T_obs
-
+    
     #K_list = [1, 2, 4, 8, 16, 32]
 
     # ============================================================
@@ -129,12 +133,8 @@ def main():
     # ============================================================
     # 5. Generate MPSK waveforms
     # ============================================================
-    M = 4
-    eta = 1.0
-    N_REPEAT = 500
-
-
-    pt_reservoir = PTSingleReservoir()
+    
+    pt_reservoir = PTSingleReservoir(eta=ETA, alpha=ALPHA)
     train_data = generate_mpsk_task(
         M=M,
         n_repeat=N_TRAIN_REPEAT,
@@ -200,47 +200,6 @@ def main():
     print("\n=== Repeated-noise temporal sampling sweep ===")
     RIDGE = 1e-6
 
-    '''for K in K_list:
-
-        print("k: ", K)
-
-        sample_times, x_train = build_mpsk_feature_matrix(
-            sols=train_sols,
-            K=K,
-            t_start=t_sample_start,
-            t_end=t_sample_end,
-        )
-
-        _, x_test = build_mpsk_feature_matrix(
-            sols=test_sols,
-            K=K,
-            t_start=t_sample_start,
-            t_end=t_sample_end,
-        )
-
-        eval_result = evaluate_independent_classification(
-            X_train=x_train,
-            y_train=train_data.y,
-            X_test=x_test,
-            y_test=test_data.y,
-            ridge=RIDGE,
-            normalize=True,
-            n_classes=M,
-        )
-
-        print(f"Train accuracy = {eval_result.train_accuracy:.2%}")
-        print(f"Test accuracy  = {eval_result.test_accuracy:.2%}")
-        print(eval_result.confusion_matrix)
-
-        print(f"Train symbol error rate = {eval_result.train_ser:.2%}")
-        print(f"Test symbol error rate  = {eval_result.test_ser:.2%}")'''
-
-
-
-
-
-
-
 
 
     config = ExperimentConfig(
@@ -288,7 +247,7 @@ def main():
         print(f"Test accuracy : {ev.test_accuracy:.2%}")
         print(ev.confusion_matrix)'''
 
-    for K in [1, 2, 4, 8, 16, 32]:
+    '''for K in [1, 2, 4, 8, 16, 32]:
         for ridge in [1e-8, 1e-6, 1e-4]:
 
             result = experiment.evaluate(
@@ -310,7 +269,134 @@ def main():
                 f"dim={ev.feature_dim:2d} | "
                 f"train={ev.train_accuracy:.2%} | "
                 f"test={ev.test_accuracy:.2%}"
-            )
+            )'''
+    
+    # ============================================================
+    # Observation window sweep
+    # ============================================================
+
+    SAMPLING_WINDOWS = {
+        "pulse_aligned": (
+            t_center - 3 * sigma,
+            t_center + 3 * sigma,
+        ),
+        "early": (
+            0.5e-6,
+            0.7e-6,
+        ),
+        "intermediate": (
+            0.5e-6,
+            0.9e-6,
+        ),
+        "original": (
+            0.5e-6,
+            1.2e-6,
+        ),
+        "late": (
+            0.6e-6,
+            1.2e-6,
+        ),
+    }
+
+    K_LIST = [1, 2, 4, 8, 16, 32]
+    RIDGE_LIST = [1e-8, 1e-6, 1e-4]
+
+    all_results = []
+
+    # ============================================================
+    # Sweep windows, K and ridge
+    # ============================================================
+
+    for window_name, (t_start, t_end) in SAMPLING_WINDOWS.items():
+
+        experiment.config.t_start = t_start
+        experiment.config.t_end = t_end
+
+        print("\n========================================")
+        print(f"Window: {window_name}")
+        print(
+            f"Range: {t_start * 1e9:.2f} - "
+            f"{t_end * 1e9:.2f} ns"
+        )
+        print("========================================")
+
+        for K in K_LIST:
+            for ridge in RIDGE_LIST:
+
+                result = experiment.evaluate(
+                    simulation=simulation,
+                    k=K,
+                    ridge=ridge,
+                )
+
+                ev = result.evaluation
+
+                print(
+                    f"K={K:2d} | "
+                    f"ridge={ridge:.0e} | "
+                    f"dim={ev.feature_dim:2d} | "
+                    f"train={ev.train_accuracy:.2%} | "
+                    f"test={ev.test_accuracy:.2%}"
+                )
+
+                all_results.append({
+                    "M": M,
+                    "window": window_name,
+                    "t_start_ns": t_start * 1e9,
+                    "t_end_ns": t_end * 1e9,
+                    "K": K,
+                    "feature_dim": ev.feature_dim,
+                    "ridge": ridge,
+                    "train_accuracy": ev.train_accuracy,
+                    "test_accuracy": ev.test_accuracy,
+                })
+
+
+    # ============================================================
+    # Save results
+    # ============================================================
+
+    output_csv = f"mpsk_pt_window_sweep_M{M}.csv"
+
+    with open(output_csv, "w", newline="") as f:
+
+        writer = csv.DictWriter(
+            f,
+            fieldnames=list(all_results[0].keys())
+        )
+
+        writer.writeheader()
+        writer.writerows(all_results)
+
+    print(f"\nResults saved to {output_csv}")
+
+
+    # ============================================================
+    # Best configuration for each window
+    # ============================================================
+
+    print("\n========================================") 
+    print("Best result per window")
+    print("========================================")
+
+    for window_name in SAMPLING_WINDOWS:
+
+        candidates = [
+            r for r in all_results
+            if r["window"] == window_name
+        ]
+
+        best = max(
+            candidates,
+            key=lambda r: r["test_accuracy"]
+        )
+
+        print(
+            f"{window_name:15s} | "
+            f"K={best['K']:2d} | "
+            f"ridge={best['ridge']:.0e} | "
+            f"test={best['test_accuracy']:.2%}"
+        )
 
 
 

@@ -17,7 +17,7 @@ from src.tasks.properties.kernel_rank import evaluate_kernel_rank
 FC = 48e6
 TS_RATIO = 0.5
 TS = TS_RATIO / FC
-ETA = 1.0
+ETA = 1.1
 ALPHA = 8.33
 INPUT_SCALE = 1e-4
 SEED = 44  # Original combined runner used SEED + 2 (42 + 2).

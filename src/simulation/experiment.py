@@ -269,6 +269,25 @@ class ReadoutExperiment:
                     normalize=cfg.normalize,
                 )
 
+            elif cfg.evaluation_type == "sequence_classification":
+                # Chronological split, same washout as continuous regression.
+                start = self.task_data.washout
+                if cfg.valid_start is not None:
+                    start = max(start, cfg.valid_start)
+                stop = len(y) if cfg.valid_stop is None else min(len(y), cfg.valid_stop)
+                if stop <= start:
+                    raise ValueError("Empty valid classification interval")
+                X_valid, y_valid = X[start:stop], np.asarray(y)[start:stop]
+                n_train = int(len(y_valid) * self.task_data.train_ratio)
+                if not 0 < n_train < len(y_valid):
+                    raise ValueError("Empty train/test partition")
+                eval_result = evaluate_independent_classification(
+                    X_train=X_valid[:n_train], y_train=y_valid[:n_train],
+                    X_test=X_valid[n_train:], y_test=y_valid[n_train:],
+                    ridge=ridge_eval, normalize=cfg.normalize,
+                    n_classes=cfg.n_classes,
+                )
+
             elif cfg.evaluation_type == "scalar_classification":
 
                 eval_result = evaluate_scalar_classification(

@@ -15,7 +15,7 @@ from src.simulation.runner import validate_solution
 from src.tasks.properties.voltage_decay import evaluate_voltage_decay
 
 # Fixed PT configuration, consistent with the other property runners.
-ETA = 1.0
+ETA = 1.1
 ALPHA = 8.33
 FC = 48e6
 INPUT_SCALE = 1e-4  # A, peak current

@@ -17,7 +17,7 @@ from src.tasks.properties.generalization_rank import evaluate_generalization_ran
 FC = 48e6
 TS_RATIO = 0.5
 TS = TS_RATIO / FC
-ETA = 1.0
+ETA = 1.1
 ALPHA = 8.33
 INPUT_SCALE = 1e-4
 SEED = 44  # Same trial RNG stream as standalone KR.

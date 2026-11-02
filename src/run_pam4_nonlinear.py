@@ -1,408 +1,148 @@
+"""Nonlinear PAM4: single-symbol and full temporal-window ridge baselines.
+
+Place this file in src/run_pam4_nonlinear.py and run:
+    python3 -m src.run_pam4_nonlinear
+
+The reservoir is simulated ONCE. All methods use the same target indices,
+with future observation windows constrained to stay within each data split.
+"""
+from pathlib import Path
+import csv
 import numpy as np
 
 from src.circuits.pt_single import PTSingleReservoir
 from src.tasks.applications.pam4_nonlinear import generate_pam4_nonlinear_task
 from src.simulation.runner import simulate_continuous_task
-from src.simulation.evaluation import evaluate_scalar_classification
-from src.simulation.experiment import ExperimentConfig, ReadoutExperiment
-
-# ============================================================
-# Configuration
-# ============================================================
 
 N_SYMBOLS = 3000
 WASHOUT = 200
 TRAIN_RATIO = 0.8
-
 FC = 48e6
-Tc = 1.0 / FC
-
-N_CYCLES_PER_SYMBOL = 1 / 40
-T_SYMBOL = N_CYCLES_PER_SYMBOL * Tc
-
-I_SCALE = 1e-2
+N_CYCLES_PER_SYMBOL = 1 / 2
+T_SYMBOL = N_CYCLES_PER_SYMBOL / FC
+I_SCALE = 1e-4
 K = 8
 POINTS_PER_SYMBOL = 16
-
 RIDGE = 1e-6
-ALPHA = 2.78
+ALPHA = 8.33
 SEED = 42
-
-# Nonlinear channel / noise controls
 ADD_AWGN = False
 SNR_DB = 40.0
 NOISE_SEED = 123
-
 NL_QUAD = 0.036
 NL_CUBIC = -0.011
-
-# Linear channel uses n-2 ... n+2, so exclude the final two edge samples
-# from ALL three methods for a strictly fair comparison.
 CHANNEL_RADIUS = 2
+L_LIST = (0, 4, 8, 12, 16, 20)
+OUTPUT_CSV = Path('pam4_nonlinear_temporal_sweep.csv')
 
 
-# ============================================================
-# Helpers
-# ============================================================
+def build_future_window(X, L):
+    """Row n = [X[n], X[n+1], ..., X[n+L]]; invalid tail is NaN."""
+    N, D = X.shape
+    out = np.full((N, D * (L + 1)), np.nan, dtype=float)
+    for offset in range(L + 1):
+        out[:N - L, offset * D:(offset + 1) * D] = X[offset:N - L + offset]
+    return out
 
 
-def print_result(name, feature_dim, result):
-    print(f"\n=== {name} ===")
-    print(f"Feature dim    : {feature_dim}")
-    print(f"Train NRMSE    : {result['train_nrmse']:.6f}")
-    print(f"Test NRMSE     : {result['test_nrmse']:.6f}")
-    print(f"Train accuracy : {result['train_acc']:.4%}")
-    print(f"Test accuracy  : {result['test_acc']:.4%}")
-    print(f"Train SER      : {result['train_ser']:.4e}")
-    print(f"Test SER       : {result['test_ser']:.4e}")
+def evaluate(X, y, train_idx, test_idx, ridge=RIDGE):
+    """Scalar ridge with intercept, train-only z-score, and PAM4 quantization."""
+    a, b = np.asarray(X[train_idx], float), np.asarray(X[test_idx], float)
+    yt, yv = np.asarray(y[train_idx], float), np.asarray(y[test_idx], float)
+    if not (np.isfinite(a).all() and np.isfinite(b).all()):
+        raise ValueError('Nonfinite features: check window bounds')
+    mu, std = a.mean(axis=0), a.std(axis=0)
+    std[std < 1e-12] = 1.0
+    a, b = (a - mu) / std, (b - mu) / std
+    # Intercept is unregularized; centered y keeps ridge well conditioned.
+    ymean = yt.mean()
+    gram = a.T @ a
+    coef = np.linalg.solve(gram + ridge * np.eye(a.shape[1]), a.T @ (yt - ymean))
+    pred_train, pred_test = a @ coef + ymean, b @ coef + ymean
+
+    def score(truth, pred):
+        labels = np.clip(np.rint(pred), 0, 3).astype(int)
+        acc = float(np.mean(labels == truth))
+        denom = np.std(truth)
+        err = float(np.sqrt(np.mean((truth - pred) ** 2)) / denom) if denom > 0 else np.nan
+        return acc, err
+
+    train_acc, train_nrmse = score(yt, pred_train)
+    test_acc, test_nrmse = score(yv, pred_test)
+    return dict(feature_dim=X.shape[1], n_train=len(train_idx), n_test=len(test_idx),
+                train_accuracy=train_acc, test_accuracy=test_acc,
+                train_nrmse=train_nrmse, test_nrmse=test_nrmse,
+                train_ser=1-train_acc, test_ser=1-test_acc)
 
 
-# ============================================================
-# Generate PAM4 + linear ISI + nonlinear distortion (+ optional AWGN)
-# ============================================================
-
-task_data = generate_pam4_nonlinear_task(
-    n_symbols=N_SYMBOLS,
-    seed=SEED,
-    washout=WASHOUT,
-    train_ratio=TRAIN_RATIO,
-    quadratic=NL_QUAD,
-    cubic=NL_CUBIC,
-    add_awgn=ADD_AWGN,
-    snr_db=SNR_DB,
-    noise_seed=NOISE_SEED,
-    channel_radius=CHANNEL_RADIUS,
-)
-
-u = task_data.u
-y = task_data.y
-
-n_symbols = len(u)
-
-u_scale = task_data.metadata["input_scale"]
-measured_snr_db = task_data.metadata["measured_snr_db"]
-channel_radius = task_data.metadata["channel_radius"]
-
-
-
-# ============================================================
-# Physical simulation time
-# ============================================================
-
-dt = T_SYMBOL / POINTS_PER_SYMBOL
-t_end = n_symbols * T_SYMBOL
-
-
-
-# ============================================================
-# Reservoir
-# ============================================================
-
-reservoir = PTSingleReservoir(
-    eta=1.0,
-    alpha=ALPHA,
-)
-
-sim_result = simulate_continuous_task(
-    reservoir=reservoir,
-    task_data=task_data,
-    symbol_period=T_SYMBOL,
-    points_per_symbol=POINTS_PER_SYMBOL,
-    k=K,
-    amplitude_scale=I_SCALE,
-    encoding="zoh",
-)
-
-X = sim_result.X
-y = sim_result.y
-
-sol = sim_result.solutions
-t_eval = sim_result.t_eval
-
-
-print(f"Tc               = {Tc * 1e9:.4f} ns")
-print(f"T_SYMBOL         = {T_SYMBOL * 1e9:.4f} ns")
-print(f"dt               = {dt * 1e12:.4f} ps")
-print(f"points/symbol    = {T_SYMBOL / dt:.1f}")
-print(f"temporal nodes K = {K}")
-print(f"t_eval points    = {len(t_eval)}")
-print(f"received scale   = {u_scale:.6f}")
-print(f"nonlinear model  = q + {NL_QUAD} q^2 {NL_CUBIC:+.3f} q^3")
-print(f"AWGN             = {ADD_AWGN}")
-if ADD_AWGN:
-    print(f"requested SNR    = {SNR_DB:.2f} dB")
-    print(f"measured SNR     = {measured_snr_db:.2f} dB")
-
-# ============================================================
-# Common valid symbol range for all three methods
-# ============================================================
-#
-# apply_linear_channel() uses a centered n-2...n+2 channel and leaves
-# edge values undefined/zero.  Washout already removes the first edge;
-# remove the final two symbols so PT, q[n], and 5-tap are evaluated on
-# exactly the same labels and chronological train/test split.
-# ============================================================
-
-start = max(task_data.washout, channel_radius)
-stop = n_symbols - channel_radius       # Python-exclusive
-indices = np.arange(start, stop)
-
-
-
-# ============================================================
-# 1) Current received-sample baseline: u[n] only
-# ============================================================
-
-X_current = u.reshape(-1, 1)
-
-result_current = evaluate_scalar_classification(
-    X=X_current,
-    y=y,
-    washout=task_data.washout,
-    train_ratio=task_data.train_ratio,
-    ridge=RIDGE,
-    normalize=True,
-    valid_start=start,
-    valid_stop=stop,
-)
-
-
-
-# ============================================================
-# 2) 5-tap centered received-waveform equalizer baseline
-#    [u[n-2], u[n-1], u[n], u[n+1], u[n+2]] -> class[n]
-# ============================================================
-
-
-X_5tap = np.zeros(
-    (n_symbols, 5),
-    dtype=float,
-)
-
-X_5tap[2:-2] = np.column_stack([
-    u[:-4],
-    u[1:-3],
-    u[2:-2],
-    u[3:-1],
-    u[4:],
-])
-
-result_5tap = evaluate_scalar_classification(
-    X=X_5tap,
-    y=y,
-    washout=task_data.washout,
-    train_ratio=task_data.train_ratio,
-    ridge=RIDGE,
-    normalize=True,
-    valid_start=start,
-    valid_stop=stop,
-)
-
-# ============================================================
-# 3) PT Single reservoir: 16D temporal state
-# ============================================================
-
-
-result_pt = evaluate_scalar_classification(
-    X=X,
-    y=y,
-    washout=task_data.washout,
-    train_ratio=task_data.train_ratio,
-    ridge=RIDGE,
-    normalize=True,
-    valid_start=start,
-    valid_stop=stop,
-)
-
-
-# ============================================================
-# Results
-# ============================================================
-
-def print_result(name, result):
-
-    print(f"\n=== {name} ===")
-    print(f"Feature dim    : {result.feature_dim}")
-
-    print(f"Train NRMSE    : {result.train_nrmse:.6f}")
-    print(f"Test NRMSE     : {result.test_nrmse:.6f}")
-
-    print(f"Train accuracy : {result.train_accuracy:.4%}")
-    print(f"Test accuracy  : {result.test_accuracy:.4%}")
-
-    print(f"Train SER      : {result.train_ser:.4e}")
-    print(f"Test SER       : {result.test_ser:.4e}")
-
-
-print_result(
-    "Current received sample u[n]",
-    result_current,
-)
-
-print_result(
-    "5-tap linear equalizer",
-    result_5tap,
-)
-
-print_result(
-    "PT Single reservoir",
-    result_pt,
-)
-
-print("\n=== Test summary ===")
-
-print(
-    f"{'Method':<28} "
-    f"{'Dim':>5} "
-    f"{'NRMSE':>10} "
-    f"{'Accuracy':>12} "
-    f"{'SER':>12}"
-)
-
-print("-" * 72)
-
-for name, result in [
-    ("u[n] only", result_current),
-    ("5-tap equalizer", result_5tap),
-    ("PT Single", result_pt),
-]:
-
-    print(
-        f"{name:<28} "
-        f"{result.feature_dim:>5d} "
-        f"{result.test_nrmse:>10.6f} "
-        f"{result.test_accuracy:>11.2%} "
-        f"{result.test_ser:>12.4e}"
+def main():
+    task = generate_pam4_nonlinear_task(
+        n_symbols=N_SYMBOLS, seed=SEED, washout=WASHOUT, train_ratio=TRAIN_RATIO,
+        quadratic=NL_QUAD, cubic=NL_CUBIC, add_awgn=ADD_AWGN,
+        snr_db=SNR_DB, noise_seed=NOISE_SEED, channel_radius=CHANNEL_RADIUS,
     )
-
-
-
-
-
-
-
-
-# ============================================================
-# Common Experiment Configuration
-# ============================================================
-
-config = ExperimentConfig(
-    symbol_period=T_SYMBOL,
-    points_per_symbol=POINTS_PER_SYMBOL,
-    k=K,
-    amplitude_scale=I_SCALE,
-    encoding="zoh",
-
-    ridge=RIDGE,
-    normalize=True,
-
-    evaluation_type="scalar_classification",
-
-    valid_start=WASHOUT,
-    valid_stop=N_SYMBOLS - CHANNEL_RADIUS,
-
-    n_classes=4,
-)
-
-
-experiment = ReadoutExperiment(
-    reservoir=reservoir,
-    task_data=task_data,
-    config=config,
-    reservoir_name="PT Single",
-)
-
-# ============================================================
-# Reservoir simulation
-# ============================================================
-
-#simulation = experiment.simulate()
-simulation = sim_result
-
-# ============================================================
-# Readout evaluation
-# ============================================================
-
-result = experiment.evaluate(
-    simulation=simulation,
-    k=K,
-    ridge=RIDGE,
-)
-
-ev = result.evaluation
-
-print("\n=== PAM4 Nonlinear: Common Experiment ===")
-
-print(f"Feature dimension: {ev.feature_dim}")
-print(f"Train samples    : {ev.n_train}")
-print(f"Test samples     : {ev.n_test}")
-
-print(f"Train NRMSE      : {ev.train_nrmse:.6f}")
-print(f"Test NRMSE       : {ev.test_nrmse:.6f}")
-
-print(f"Train accuracy   : {ev.train_accuracy:.4%}")
-print(f"Test accuracy    : {ev.test_accuracy:.4%}")
-
-print(f"Train SER        : {ev.train_ser:.6f}")
-print(f"Test SER         : {ev.test_ser:.6f}")
-
-print("\nConfusion matrix:")
-print(ev.confusion_matrix)
-
-
-# ============================================================
-# Regression check
-# ============================================================
-
-
-np.testing.assert_allclose(
-    [
-        ev.train_nrmse,
-        ev.test_nrmse,
-        ev.train_accuracy,
-        ev.test_accuracy,
-    ],
-    [
-        result_pt.train_nrmse,
-        result_pt.test_nrmse,
-        result_pt.train_accuracy,
-        result_pt.test_accuracy,
-    ],
-    rtol=1e-10,
-    atol=1e-10,
-)
-
-assert ev.feature_dim == 16
-assert ev.n_train == 2238
-assert ev.n_test == 560
-
-print("\nRegression check: PASS")
-
-
-# ============================================================
-# K sweep
-# ============================================================
-
-K_LIST = [4, 8, 16]
-
-for K_eval in K_LIST:
-
-    result = experiment.evaluate(
-        simulation=simulation,
-        k=K_eval,
-        ridge=RIDGE,
+    u = np.asarray(task.u, float)
+    reservoir = PTSingleReservoir(eta=1.0, alpha=ALPHA)
+    sim = simulate_continuous_task(
+        reservoir=reservoir, task_data=task, symbol_period=T_SYMBOL,
+        points_per_symbol=POINTS_PER_SYMBOL, k=K,
+        amplitude_scale=I_SCALE, encoding='zoh',
     )
+    X = np.asarray(sim.X, float)
+    y = np.asarray(sim.y, int)
+    if X.shape != (len(y), 2*K):
+        raise ValueError(f'Unexpected feature shape: {X.shape}; expected {(len(y),2*K)}')
 
-    ev = result.evaluation
+    # The same split and samples are used for every row in the table.
+    # Future windows must not cross the train/test boundary or the final channel edge.
+    valid_start = max(WASHOUT, CHANNEL_RADIUS)
+    valid_stop = len(y) - CHANNEL_RADIUS
+    all_indices = np.arange(valid_start, valid_stop)
+    boundary_pos = int(len(all_indices) * TRAIN_RATIO)
+    train_boundary = int(all_indices[boundary_pos])
+    max_L = max(L_LIST)
+    train_idx = all_indices[:boundary_pos]
+    train_idx = train_idx[train_idx + max_L < train_boundary]
+    test_idx = all_indices[boundary_pos:]
+    test_idx = test_idx[test_idx + max_L < valid_stop]
+    if len(train_idx) == 0 or len(test_idx) == 0:
+        raise ValueError('Not enough samples for the selected maximum window')
 
-    assert ev.feature_dim == 2 * K_eval
+    print(f'T_SYMBOL={T_SYMBOL*1e9:.4f} ns | dt={T_SYMBOL/POINTS_PER_SYMBOL*1e12:.3f} ps')
+    print(f'K={K}, X={X.shape}, AWGN={ADD_AWGN}, nonlinear=q+{NL_QUAD}q²{NL_CUBIC:+}q³')
+    print(f'Common train/test sizes: {len(train_idx)}/{len(test_idx)}')
+    print(f'Boundary index: {train_boundary}; maximum future window: {max_L}')
 
-    print(
-        f"K={K_eval:2d} | "
-        f"dim={ev.feature_dim:2d} | "
-        f"Train acc={ev.train_accuracy:.4%} | "
-        f"Test acc={ev.test_accuracy:.4%} | "
-        f"Test NRMSE={ev.test_nrmse:.6f}"
-    )
+    # Centered 5-tap equalizer. All methods predict the same symbol y[n].
+    X_5tap = np.full((len(y), 5), np.nan)
+    for offset in range(-2, 3):
+        valid_n = np.arange(CHANNEL_RADIUS, len(y)-CHANNEL_RADIUS)
+        X_5tap[valid_n, offset+2] = u[valid_n+offset]
+
+    experiments = [('input_only', None, u.reshape(-1, 1)),
+                   ('linear_5tap', None, X_5tap)]
+    for L in L_LIST:
+        experiments.append(('pt_full_window', L, build_future_window(X, L)))
+
+    rows = []
+    print(f"{'Method':<19} {'L':>3} {'Dim':>5} {'Train acc':>11} {'Test acc':>10} {'Test NRMSE':>11}")
+    print('-'*69)
+    for method, L, features in experiments:
+        metrics = evaluate(features, y, train_idx, test_idx)
+        row = dict(method=method, L='' if L is None else L,
+                   latency_ns=0.0 if L is None else L*T_SYMBOL*1e9, **metrics)
+        rows.append(row)
+        print(f"{method:<19} {str(row['L']):>3} {metrics['feature_dim']:>5} "
+              f"{metrics['train_accuracy']:>10.2%} {metrics['test_accuracy']:>9.2%} "
+              f"{metrics['test_nrmse']:>11.6f}")
+
+    with OUTPUT_CSV.open('w', newline='') as file:
+        writer = csv.DictWriter(file, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f'\nSaved: {OUTPUT_CSV.resolve()}')
+    print('Note: latency_ns is additional look-ahead relative to the current symbol.')
 
 
+if __name__ == '__main__':
+    main()

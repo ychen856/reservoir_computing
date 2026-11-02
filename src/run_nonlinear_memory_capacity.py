@@ -17,7 +17,7 @@ from src.simulation.runner import simulate_continuous_task
 from src.tasks.properties.nonlinear_memory import evaluate_nonlinear_memory
 
 # Fixed physical circuit and sampling settings (no task-dependent sweep)
-ETA = 1.0
+ETA = 1.1
 ALPHA = 8.33
 FC = 48e6
 TS_RATIO = 0.5

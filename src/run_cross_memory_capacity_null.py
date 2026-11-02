@@ -20,7 +20,7 @@ from src.tasks.properties._common import split, score
 FC = 48e6
 TS_RATIO = 0.5
 SYMBOL_PERIOD = TS_RATIO / FC
-ETA, ALPHA = 1.0, 8.33
+ETA, ALPHA = 1.1, 8.33
 INPUT_SCALE = 1e-4
 N_SYMBOLS = 3000
 WASHOUT = 200
