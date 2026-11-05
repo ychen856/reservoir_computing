@@ -184,6 +184,7 @@ def simulate_continuous_task(
         n_symbols=n_symbols,
         symbol_period=symbol_period,
         k=k,
+        state_indices=getattr(reservoir, "voltage_state_indices", (0, 1)),
     )
 
     if len(X) != len(task_data.y):
@@ -203,6 +204,9 @@ def simulate_continuous_task(
             "points_per_symbol": points_per_symbol,
             "k": k,
             "feature_dim": X.shape[1],
+            "state_indices": list(getattr(reservoir, "voltage_state_indices", (0, 1))),
+            "n_tanks": getattr(reservoir, "n_tanks", 1),
+            "routing": getattr(reservoir, "mode", "single"),
             "encoding": encoding,
             "amplitude_scale": amplitude_scale,
             "solver": solver,
@@ -347,6 +351,7 @@ def extract_continuous_features(
         n_symbols=n_symbols,
         symbol_period=symbol_period,
         k=k,
+        state_indices=simulation.metadata.get("state_indices", (0, 1)),
     )
 
     return X

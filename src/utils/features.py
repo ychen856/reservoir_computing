@@ -189,3 +189,82 @@ def build_mpsk_feature_matrix(
     X = np.asarray(features)
 
     return sample_times, X
+
+
+def reorder_features_by_age(
+    X,
+    n_pairs,
+    k,
+    symbol_indices=None,
+):
+    """
+    Reorder time-major parallel features by injection age.
+
+    Assumptions
+    -----------
+    - Interleaved routing: symbol n drives pair n % n_pairs.
+    - Original columns:
+      [time0: pair0 V1,V2, pair1 V1,V2, ...,
+       time1: pair0 V1,V2, pair1 V1,V2, ...]
+
+    Output
+    ------
+    Same shape and temporal ordering, with pair blocks ordered as:
+    [currently driven pair, previous pair, ...].
+    """
+    X = np.asarray(X)
+
+    if X.ndim != 2:
+        raise ValueError("X must be a 2D array")
+
+    if (
+        not isinstance(n_pairs, (int, np.integer))
+        or n_pairs < 1
+        or not isinstance(k, (int, np.integer))
+        or k < 1
+    ):
+        raise ValueError("n_pairs and k must be positive integers")
+
+    expected_dim = 2 * n_pairs * k
+
+    if X.shape[1] != expected_dim:
+        raise ValueError(
+            f"Expected {expected_dim} features, got {X.shape[1]}"
+        )
+
+    n_samples = len(X)
+
+    if symbol_indices is None:
+        symbol_indices = np.arange(n_samples)
+    else:
+        symbol_indices = np.asarray(symbol_indices)
+
+        if symbol_indices.shape != (n_samples,):
+            raise ValueError(
+                "symbol_indices must contain one index per row"
+            )
+
+        if (
+            not np.issubdtype(symbol_indices.dtype, np.integer)
+            or np.any(symbol_indices < 0)
+        ):
+            raise ValueError(
+                "symbol_indices must be nonnegative integers"
+            )
+
+    # Shape: (samples, temporal nodes, physical pairs, voltages)
+    blocks = X.reshape(n_samples, k, n_pairs, 2)
+
+    # Age 0 = currently driven pair.
+    # Age 1 = pair driven in the previous symbol.
+    physical_pairs = (
+        symbol_indices[:, None] - np.arange(n_pairs)[None, :]
+    ) % n_pairs
+
+    reordered = np.take_along_axis(
+        blocks,
+        physical_pairs[:, None, :, None],
+        axis=2,
+    )
+
+    return reordered.reshape(X.shape)
