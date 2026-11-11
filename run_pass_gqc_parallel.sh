@@ -24,6 +24,8 @@ common=(
   --modes graphene matched_linear
   --seeds 42 43 44
   --n-dimers 2
+  --routing interleaved
+  --ordering age
   --symbols 3000 --washout 300 --train-ratio 0.8
   --amplitude 0.001 --k 8 --points-per-symbol 16 --ridge 1e-6
 )
