@@ -1,7 +1,6 @@
 """Shared configuration, age ordering and complete result persistence."""
 import argparse
 import hashlib
-import csv
 import json
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -10,6 +9,7 @@ import numpy as np
 from src.circuits.pt_single import PTSingleReservoir
 from src.circuits.pt_parallel import PTParallelReservoir
 from src.simulation.runner import simulate_continuous_task
+from src.utils.csv_output import write_csv
 from src.utils.features import reorder_features_by_age
 
 @dataclass(frozen=True)
@@ -97,16 +97,6 @@ def simulate(case, u, a, cycles=.5):
     if not np.isfinite(sim.X).all():
         raise RuntimeError('Nonfinite features')
     return sim
-
-
-def write_csv(path, rows):
-    if not rows:
-        return
-    keys = list(dict.fromkeys(key for row in rows for key in row))
-    with path.open('w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=keys)
-        writer.writeheader()
-        writer.writerows(rows)
 
 
 class Results:
