@@ -10,8 +10,8 @@ benchmark_cycles="${BENCHMARK_CYCLES:-0.5}"
 xor_parity_cycles="${XOR_PARITY_CYCLES:-1.0}"
 
 properties=(
-  memory_capacity memory_capacity_null
-  nonlinear_memory_capacity nonlinear_memory_capacity_null
+  #memory_capacity memory_capacity_null nonlinear_memory_capacity 
+  nonlinear_memory_capacity_null
   cross_memory_capacity cross_memory_capacity_null
   kernel_rank generalization_rank effective_dimension
   voltage_decay fading_memory_convergence
