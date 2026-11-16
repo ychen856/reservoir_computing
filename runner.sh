@@ -74,7 +74,7 @@ EP_TABLE=results/passive_gqc/device_ep_candidates.csv N_DIMERS=2 bash run_pass_g
 EP_TABLE=results/passive_gqc/device_ep_candidates.csv N_DIMERS=2 bash run_pass_gqc_server.sh mpsk 43 5 4 graphene --psk-orders 8 --conditions isi
  EP_TABLE=results/passive_gqc/device_ep_candidates.csv N_DIMERS=2 bash run_pass_gqc_server.sh mpsk 43 5 4 matched_linear --psk-orders 8 --conditions isi
 
-EP_TABLE=results/passive_gqc/device_ep_candidates.csv N_DIMERS=2 bash run_pass_gqc_server.sh mpsk 43 5 8 graphene --psk-orders 8 --conditions 
+EP_TABLE=results/passive_gqc/device_ep_candidates.csv N_DIMERS=2 bash run_pass_gqc_server.sh mpsk 43 5 8 graphene --psk-orders 8 --conditions awgn
  EP_TABLE=results/passive_gqc/device_ep_candidates.csv N_DIMERS=2 bash run_pass_gqc_server.sh mpsk 43 5 8 matched_linear --psk-orders 8 --conditions awgn
 EP_TABLE=results/passive_gqc/device_ep_candidates.csv N_DIMERS=2 bash run_pass_gqc_server.sh mpsk 43 5 8 graphene --psk-orders 8 --conditions clean
 EP_TABLE=results/passive_gqc/device_ep_candidates.csv N_DIMERS=2 bash run_pass_gqc_server.sh mpsk 43 5 8 matched_linear --psk-orders 8 --conditions clean
@@ -131,3 +131,6 @@ EP_TABLE=results/passive_gqc/device_ep_candidates.csv N_DIMERS=2 bash run_pass_g
 EP_TABLE=results/passive_gqc/device_ep_candidates.csv N_DIMERS=2 bash run_pass_gqc_server.sh mpsk 44 5 12 matched_linear --psk-orders 8 --conditions clean
 EP_TABLE=results/passive_gqc/device_ep_candidates.csv N_DIMERS=2 bash run_pass_gqc_server.sh mpsk 44 5 12 graphene --psk-orders 8 --conditions isi
 EP_TABLE=results/passive_gqc/device_ep_candidates.csv N_DIMERS=2 bash run_pass_gqc_server.sh mpsk 44 5 12 matched_linear --psk-orders 8 --conditions isi
+
+
+ 
