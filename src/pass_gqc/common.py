@@ -146,8 +146,8 @@ def parser(kind, tasks, task=None):
 def validate(a):
     if getattr(a, "coupling_l_nh", None) is not None:
         link = np.array([a.coupling_l_nh, a.coupling_r_ohm])
-        if a.n_dimers not in (2, 4) or not np.isfinite(link).all() or np.any(link <= 0):
-            raise ValueError("Inductive coupling requires two or four dimers and positive finite L and R")
+        if a.n_dimers < 2 or a.n_dimers % 2 or not np.isfinite(link).all() or np.any(link <= 0):
+            raise ValueError("Inductive coupling requires an even number of dimers and positive finite L and R")
     if a.smoke:
         a.symbols, a.washout = 160, 40
     finite = [a.train_ratio, a.cycles_per_symbol, a.amplitude, a.ridge, *a.xi2]

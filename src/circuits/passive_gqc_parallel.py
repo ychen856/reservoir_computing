@@ -18,8 +18,8 @@ class PassiveGQCParallelReservoir:
     def __post_init__(self):
         if self.coupling_inductance is not None:
             _positive(self.coupling_inductance, self.coupling_resistance)
-            if self.n_tanks not in (2, 4):
-                raise ValueError("Inductive coupling requires two or four dimers")
+            if self.n_tanks < 2 or self.n_tanks % 2:
+                raise ValueError("Inductive coupling requires a positive even number of dimers")
 
     @property
     def n_tanks(self):
