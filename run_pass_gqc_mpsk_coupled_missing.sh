@@ -64,6 +64,14 @@ while read -r order condition xi2; do
         continue
       fi
 
+      if [[ -e "$output" || -L "$output" ]]; then
+        archive_parent="${output_root}_partial/${output#"$output_root"/}"
+        mkdir -p "$archive_parent"
+        archive=$(mktemp -d "$archive_parent/attempt.XXXXXXXX")
+        mv "$output" "$archive/output"
+        printf 'Archived incomplete output: %s\n' "$archive/output"
+      fi
+
       "$python_bin" -u -m src.run_pass_gqc_mpsk \
         --ep-table "$ep_table" --design-indices 5 --xi2 "$xi2" --seeds "$seed" --modes graphene \
         --n-dimers "$dimers" --routing interleaved --ordering age \
