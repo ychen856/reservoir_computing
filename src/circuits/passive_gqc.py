@@ -165,81 +165,91 @@ class PassiveGQCReservoir:
 
     def simulate(self, input_func, t_span, t_eval, x0=None, solver="ivp",
                  symbol_period=None, pulse_duty=1.0, max_step=np.inf):
-        """Integrate in normalized time, returning physical time and states.
+        """Integrate the single-dimer equations and return physical time and states."""
+        return _integrate_passive_gqc(
+            self._derivatives, input_func, t_span, t_eval, x0,
+            self.state_size, self.operating_point.design.omega1,
+            "Radau" if self.state_size == 5 else "DOP853",
+            solver, symbol_period, pulse_duty, max_step,
+        )
 
-        The runner's exact_zoh option uses numerical integration on each
-        constant-input interval, including any pulse turn-off boundary.
-        """
-        from types import SimpleNamespace
-        from scipy.integrate import solve_ivp
-
-        if not max_step > 0:
-            raise ValueError("max_step must be positive")
-        start, end = t_span
-        t_eval = np.asarray(t_eval, dtype=float)
-        if (not np.isfinite([start, end]).all() or end <= start
-                or t_eval.ndim != 1 or not t_eval.size or not np.isfinite(t_eval).all()
-                or t_eval[0] < start or t_eval[-1] > end or np.any(np.diff(t_eval) <= 0)):
-            raise ValueError("t_eval must increase within a finite, increasing t_span")
-        state = np.zeros(self.state_size) if x0 is None else np.asarray(x0, dtype=float)
-        if state.shape != (self.state_size,) or not np.isfinite(state).all():
-            raise ValueError(f"x0 must contain {self.state_size} finite values")
-        edges = np.array([start, end])
-        if solver == "exact_zoh":
-            if symbol_period is None:
-                raise ValueError("exact_zoh requires symbol_period")
-            _positive(symbol_period)
-            if not 0 < pulse_duty <= 1:
-                raise ValueError("pulse_duty must be in (0, 1]")
-            symbols = np.arange(math.floor(start / symbol_period),
-                                math.ceil(end / symbol_period)) * symbol_period
-            boundaries = symbols
-            if pulse_duty < 1:
-                boundaries = np.r_[symbols, symbols + pulse_duty * symbol_period]
-            edges = np.unique(np.r_[start, boundaries[(start < boundaries) & (boundaries < end)], end])
-        elif solver != "ivp":
-            raise ValueError(f"Unsupported solver: {solver}")
-
+    def _derivatives(self, x, current):
+        """Return physical-time derivatives for a current injected at V1."""
         point = self.operating_point
         d = point.design
-        scale = d.omega1
         c1, c2 = d.c1, point.c2
         gqc = self.varactor
         with_esr = self.state_size == 5
-        method = "Radau" if with_esr else "DOP853"
-        samples = np.empty((self.state_size, len(t_eval)))
-        for left, right in zip(edges[:-1], edges[1:]):
-            held = input_func(left + (right-left)/2) if solver == "exact_zoh" else None
+        v1, v2, i1, i2 = x[:4]
+        a = current - i1 - v1/d.r1
+        b = -i2 - v2/self.r2
+        branch_voltage = v1-v2
+        intrinsic = x[4] if with_esr else branch_voltage
+        if gqc is None:
+            capacitance = d.coupling_capacitance
+        else:
+            capacitance, resistance = gqc.capacitance_and_resistance(self.bias_voltage + intrinsic)
+        if with_esr:
+            branch_current = (branch_voltage - intrinsic)/resistance
+            return np.array([(a-branch_current)/c1, (b+branch_current)/c2,
+                             v1/d.inductance, v2/d.inductance,
+                             branch_current/capacitance])
+        determinant = c1*c2 + capacitance*(c1+c2)
+        return np.array([((c2+capacitance)*a+capacitance*b)/determinant,
+                         (capacitance*a+(c1+capacitance)*b)/determinant,
+                         v1/d.inductance, v2/d.inductance])
 
-            def rhs(tau, x):
-                v1, v2, i1, i2 = x[:4]
-                current = input_func(left + tau/scale) if held is None else held
-                a = current - i1 - v1/d.r1
-                b = -i2 - v2/self.r2
-                branch_voltage = v1-v2
-                intrinsic = x[4] if with_esr else branch_voltage
-                if gqc is None:
-                    capacitance = d.coupling_capacitance
-                else:
-                    capacitance, resistance = gqc.capacitance_and_resistance(self.bias_voltage + intrinsic)
-                if with_esr:
-                    branch_current = (branch_voltage - intrinsic)/resistance
-                    return np.array([(a-branch_current)/c1, (b+branch_current)/c2,
-                                     v1/d.inductance, v2/d.inductance,
-                                     branch_current/capacitance])/scale
-                determinant = c1*c2 + capacitance*(c1+c2)
-                return np.array([((c2+capacitance)*a+capacitance*b)/determinant,
-                                 (capacitance*a+(c1+capacitance)*b)/determinant,
-                                 v1/d.inductance, v2/d.inductance])/scale
 
-            solution = solve_ivp(rhs, (0, (right-left)*scale), state, method=method,
-                                 rtol=1e-8, atol=1e-11, dense_output=True,
-                                 max_step=max_step*scale)
-            if not solution.success:
-                raise RuntimeError(solution.message)
-            lo = np.searchsorted(t_eval, left)
-            hi = np.searchsorted(t_eval, right, side="right" if right == end else "left")
-            if hi > lo:
-                samples[:, lo:hi] = solution.sol((t_eval[lo:hi]-left)*scale)
-            state = solution.y[:, -1]
-        return SimpleNamespace(t=t_eval, y=samples, success=True, message="Integration completed.")
+def _integrate_passive_gqc(derivatives, input_func, t_span, t_eval, x0,
+                           state_size, scale, method, solver, symbol_period,
+                           pulse_duty, max_step):
+    """Integrate in normalized time, splitting the exact-ZOH drive at its edges."""
+    from types import SimpleNamespace
+    from scipy.integrate import solve_ivp
+
+    if not max_step > 0:
+        raise ValueError("max_step must be positive")
+    start, end = t_span
+    t_eval = np.asarray(t_eval, dtype=float)
+    if (not np.isfinite([start, end]).all() or end <= start
+            or t_eval.ndim != 1 or not t_eval.size or not np.isfinite(t_eval).all()
+            or t_eval[0] < start or t_eval[-1] > end or np.any(np.diff(t_eval) <= 0)):
+        raise ValueError("t_eval must increase within a finite, increasing t_span")
+    state = np.zeros(state_size) if x0 is None else np.asarray(x0, dtype=float)
+    if state.shape != (state_size,) or not np.isfinite(state).all():
+        raise ValueError(f"x0 must contain {state_size} finite values")
+    edges = np.array([start, end])
+    if solver == "exact_zoh":
+        if symbol_period is None:
+            raise ValueError("exact_zoh requires symbol_period")
+        _positive(symbol_period)
+        if not 0 < pulse_duty <= 1:
+            raise ValueError("pulse_duty must be in (0, 1]")
+        symbols = np.arange(math.floor(start / symbol_period),
+                            math.ceil(end / symbol_period)) * symbol_period
+        boundaries = symbols
+        if pulse_duty < 1:
+            boundaries = np.r_[symbols, symbols + pulse_duty * symbol_period]
+        edges = np.unique(np.r_[start, boundaries[(start < boundaries) & (boundaries < end)], end])
+    elif solver != "ivp":
+        raise ValueError(f"Unsupported solver: {solver}")
+
+    samples = np.empty((state_size, len(t_eval)))
+    for left, right in zip(edges[:-1], edges[1:]):
+        held = input_func(left + (right-left)/2) if solver == "exact_zoh" else None
+
+        def rhs(tau, x):
+            current = input_func(left + tau/scale) if held is None else held
+            return derivatives(x, current)/scale
+
+        solution = solve_ivp(rhs, (0, (right-left)*scale), state, method=method,
+                             rtol=1e-8, atol=1e-11, dense_output=True,
+                             max_step=max_step*scale)
+        if not solution.success:
+            raise RuntimeError(solution.message)
+        lo = np.searchsorted(t_eval, left)
+        hi = np.searchsorted(t_eval, right, side="right" if right == end else "left")
+        if hi > lo:
+            samples[:, lo:hi] = solution.sol((t_eval[lo:hi]-left)*scale)
+        state = solution.y[:, -1]
+    return SimpleNamespace(t=t_eval, y=samples, success=True, message="Integration completed.")

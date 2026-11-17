@@ -49,6 +49,8 @@ def convergence(case, a, out):
             else:
                 initial[4] = 0.1
             initial = np.tile(initial[:5], case.n_dimers)
+            if reservoir.state_size > initial.size:
+                initial = np.pad(initial, (0, reservoir.state_size - initial.size))
             solution = reservoir.simulate(drive, span, t, x0=initial,
                                            solver="exact_zoh", symbol_period=ts)
             difference = solution.y-base.y
@@ -56,6 +58,8 @@ def convergence(case, a, out):
             # Dimensionless state norm uses voltage 1 V, current 1/Z A.
             z = np.sqrt(case.l_nh*1e-9/(case.c1_pf*1e-12))
             scales = np.tile([1, 1, 1/z, 1/z, 1], case.n_dimers)
+            if reservoir.state_size > scales.size:
+                scales = np.pad(scales, (0, reservoir.state_size - scales.size), constant_values=1/z)
             state_distance = np.linalg.norm(difference/scales[:, None], axis=0)
             tail = slice(int(0.9*len(t)), None)
             np.savez_compressed(out.directory(case, "fading_memory_convergence")/
@@ -102,7 +106,13 @@ def main(argv=None, *, task=None):
     p.add_argument("--convergence-symbols", type=int, default=480)
     p.add_argument("--decay-drive-symbols", type=int, default=8)
     p.add_argument("--decay-symbols", type=int, default=480)
+    p.add_argument("--coupling-l-nh", type=float, help="Series link inductance per adjacent dimer pair, in nH")
+    p.add_argument("--coupling-r-ohm", type=float, default=1.0, help="Series link resistance in ohms")
     a = p.parse_args(argv)
+    if a.coupling_l_nh is not None:
+        link = np.array([a.coupling_l_nh, a.coupling_r_ohm])
+        if a.n_dimers not in (2, 4) or not np.isfinite(link).all() or np.any(link <= 0):
+            p.error("Inductive coupling requires two or four dimers and positive finite L and R")
     validate(a)
     if a.smoke:
         a.max_delay, a.nonlinear_max_delay, a.cross_max_delay = 5, 5, 4

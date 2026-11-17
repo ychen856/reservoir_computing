@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Optional
 
 import numpy as np
 
@@ -44,6 +45,8 @@ class Case:
     n_dimers: int = 1
     routing: str = "broadcast"
     ordering: str = "physical"
+    coupling_l_nh: Optional[float] = None
+    coupling_r_ohm: float = 1.0
 
     @property
     def key(self):
@@ -67,7 +70,18 @@ class Case:
             [0, 1, 0, 0, 0],
             [1/(r*kappa), -1/(r*kappa), 0, 0, -1/(r*kappa)],
         ])
-        poles = np.linalg.eigvals(matrix)*2*np.pi*self.frequency
+        omega = 2*np.pi*self.frequency
+        if self.coupling_l_nh is not None:
+            # Same normalized states as the two dimer blocks, including Z*i_link.
+            coupled = np.zeros((11, 11))
+            coupled[:5, :5] = coupled[5:10, 5:10] = matrix
+            coupled[0, 10], coupled[5, 10] = -1, 1
+            ratio = z/(omega*self.coupling_l_nh*1e-9)
+            coupled[10, [0, 5, 10]] = [ratio, -ratio, -ratio*self.coupling_r_ohm/z]
+            matrix = coupled
+        poles = np.linalg.eigvals(matrix)*omega
+        if self.coupling_l_nh is not None:
+            poles = np.tile(poles, self.n_dimers // 2)
         maximum = float(max(poles.real))
         upper = poles[poles.imag > 0]
         gap = float(abs(upper[0]-upper[1])) if len(upper) == 2 else None
@@ -92,7 +106,9 @@ class Case:
         dimer = PassiveGQCReservoir(point, self.r2_ohm, device, self.bias_v, True)
         if self.n_dimers == 1:
             return dimer
-        return PassiveGQCParallelReservoir((dimer,) * self.n_dimers, self.routing)
+        inductance = None if self.coupling_l_nh is None else self.coupling_l_nh*1e-9
+        return PassiveGQCParallelReservoir((dimer,) * self.n_dimers, self.routing,
+                                          inductance, self.coupling_r_ohm)
 
 
 def parser(kind, tasks, task=None):
@@ -173,7 +189,10 @@ def load_cases(a):
                     point_fields = dict(fields, r2_ohm=fields["r2_ohm"]/xi2)
                     case = Case(index, seed, mode, r2_ep_ohm=fields["r2_ohm"],
                                 xi2=xi2, n_dimers=a.n_dimers, routing=a.routing,
-                                ordering=a.ordering, **point_fields)
+                                ordering=a.ordering,
+                                coupling_l_nh=getattr(a, "coupling_l_nh", None),
+                                coupling_r_ohm=getattr(a, "coupling_r_ohm", 1.0),
+                                **point_fields)
                     if not case.pole_diagnostics()["small_signal_stable"]:
                         raise ValueError(f"Unstable small-signal point: {case.key}")
                     designs.append(case)
