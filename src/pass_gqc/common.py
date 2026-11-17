@@ -137,10 +137,17 @@ def parser(kind, tasks, task=None):
     p.add_argument("--ridge", type=float, default=1e-6)
     p.add_argument("--output", type=Path, default=Path("results")/f"pass_gqc_{task or kind}")
     p.add_argument("--smoke", action="store_true")
+    if kind in ("properties", "benchmarks"):
+        p.add_argument("--coupling-l-nh", type=float, help="Series link inductance per adjacent dimer pair, in nH")
+        p.add_argument("--coupling-r-ohm", type=float, default=1.0, help="Series link resistance in ohms")
     return p
 
 
 def validate(a):
+    if getattr(a, "coupling_l_nh", None) is not None:
+        link = np.array([a.coupling_l_nh, a.coupling_r_ohm])
+        if a.n_dimers not in (2, 4) or not np.isfinite(link).all() or np.any(link <= 0):
+            raise ValueError("Inductive coupling requires two or four dimers and positive finite L and R")
     if a.smoke:
         a.symbols, a.washout = 160, 40
     finite = [a.train_ratio, a.cycles_per_symbol, a.amplitude, a.ridge, *a.xi2]
