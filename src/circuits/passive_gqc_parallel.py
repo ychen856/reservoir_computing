@@ -39,12 +39,17 @@ class PassiveGQCParallelReservoir:
         return tuple(offset + i for offset in offsets[:-1] for i in (0, 1))
 
     def simulate(self, input_func, t_span, t_eval, x0=None, solver="ivp",
-                 symbol_period=None, pulse_duty=1.0):
-        if self.mode == "interleaved" and (solver != "exact_zoh" or not symbol_period):
+                 symbol_period=None, pulse_duty=1.0, *, active_lane=None, max_step=np.inf):
+        """Use a fixed input lane for a piecewise-linear interleaved segment."""
+        if active_lane is not None:
+            if (self.coupling_inductance is None or self.mode != "interleaved"
+                    or solver != "ivp" or not 0 <= active_lane < self.n_tanks):
+                raise ValueError("A fixed lane requires coupled interleaved IVP integration")
+        elif self.mode == "interleaved" and (solver != "exact_zoh" or not symbol_period):
             raise ValueError("Interleaved simulation requires an exact_zoh symbol clock")
         if self.coupling_inductance is not None:
             return self._simulate_coupled(input_func, t_span, t_eval, x0,
-                                          solver, symbol_period, pulse_duty)
+                                          solver, symbol_period, pulse_duty, active_lane, max_step)
         initial = np.zeros(self.state_size) if x0 is None else np.asarray(x0)
         if initial.shape != (self.state_size,):
             raise ValueError("Incorrect parallel initial state size")
@@ -61,7 +66,7 @@ class PassiveGQCParallelReservoir:
             end = offset + dimer.state_size
             result = dimer.simulate(drive, t_span, t_eval, x0=initial[offset:end],
                                     solver=solver, symbol_period=symbol_period,
-                                    pulse_duty=pulse_duty)
+                                    pulse_duty=pulse_duty, max_step=max_step)
             states.append(result.y)
             offset = end
         return SimpleNamespace(t=result.t, y=np.concatenate(states), success=True,
@@ -69,7 +74,7 @@ class PassiveGQCParallelReservoir:
 
 
     def _simulate_coupled(self, input_func, t_span, t_eval, x0, solver,
-                          symbol_period, pulse_duty):
+                          symbol_period, pulse_duty, active_lane, max_step):
         initial = np.zeros(self.state_size) if x0 is None else np.asarray(x0)
         if initial.shape != (self.state_size,):
             raise ValueError("Incorrect coupled initial state size")
@@ -80,14 +85,15 @@ class PassiveGQCParallelReservoir:
             start, stop = offsets[lane], offsets[lane + 2]
             pair_initial = np.r_[initial[start:stop], initial[offsets[-1] + pair]]
             result = self._simulate_pair(lane, input_func, t_span, t_eval,
-                                         pair_initial, solver, symbol_period, pulse_duty)
+                                         pair_initial, solver, symbol_period, pulse_duty,
+                                         active_lane, max_step)
             pair_states.append(result.y[:-1])
             link_states.append(result.y[-1:])
         result.y = np.concatenate(pair_states + link_states)
         return result
 
     def _simulate_pair(self, lane, input_func, t_span, t_eval, x0, solver,
-                       symbol_period, pulse_duty):
+                       symbol_period, pulse_duty, active_lane, max_step):
         first, second = self.dimers[lane:lane + 2]
         offset = first.state_size
         inductance, resistance = self.coupling_inductance, self.coupling_resistance
@@ -95,7 +101,9 @@ class PassiveGQCParallelReservoir:
         def drive(time):
             current = input_func(time)
             if self.mode == "interleaved":
-                active = int(np.floor(time / symbol_period)) % self.n_tanks
+                active = active_lane
+                if active is None:
+                    active = int(np.floor(time / symbol_period)) % self.n_tanks
                 return (current if active == lane else 0.0,
                         current if active == lane + 1 else 0.0)
             return current, current
@@ -111,5 +119,5 @@ class PassiveGQCParallelReservoir:
         return _integrate_passive_gqc(
             derivatives, drive, t_span, t_eval, x0, first.state_size + second.state_size + 1,
             first.operating_point.design.omega1, "Radau",
-            solver, symbol_period, pulse_duty, np.inf,
+            solver, symbol_period, pulse_duty, max_step,
         )

@@ -137,7 +137,7 @@ def parser(kind, tasks, task=None):
     p.add_argument("--ridge", type=float, default=1e-6)
     p.add_argument("--output", type=Path, default=Path("results")/f"pass_gqc_{task or kind}")
     p.add_argument("--smoke", action="store_true")
-    if kind in ("properties", "benchmarks"):
+    if kind in ("properties", "benchmarks") or task == "mpsk":
         p.add_argument("--coupling-l-nh", type=float, help="Series link inductance per adjacent dimer pair, in nH")
         p.add_argument("--coupling-r-ohm", type=float, default=1.0, help="Series link resistance in ohms")
     return p

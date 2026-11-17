@@ -47,6 +47,9 @@ def waveform_features(case, waves, t, observation, a):
     times = np.linspace(*observation, a.k)
     switch_period = a.cycles_per_symbol / case.frequency
     interleaved = case.n_dimers > 1 and case.routing == "interleaved"
+    coupled = getattr(reservoir, "coupling_inductance", None) is not None
+    if coupled:
+        voltage_indices = list(reservoir.voltage_state_indices)
     max_step = np.min(np.diff(t))
     features = []
     cache = {}
@@ -64,20 +67,31 @@ def waveform_features(case, waves, t, observation, a):
             edges = t[0] + switch_period * np.arange(1, int(np.ceil((t[-1]-t[0])/switch_period)))
             edges = np.r_[t[0], edges[edges < t[-1]], t[-1]]
             blocks = np.empty((a.k, len(dimers), 2))
-            initial = [np.zeros(dimer.state_size) for dimer in dimers]
+            initial = np.zeros(reservoir.state_size) if coupled else [
+                np.zeros(dimer.state_size) for dimer in dimers]
             for slot, (left, right) in enumerate(zip(edges[:-1], edges[1:])):
                 lo = np.searchsorted(times, left)
                 hi = np.searchsorted(times, right, side="right" if right == t[-1] else "left")
                 evaluation = np.unique(np.r_[times[lo:hi], right])
-                for lane, dimer in enumerate(dimers):
-                    current = drive if lane == slot % len(dimers) else zero_current
-                    sol = dimer.simulate(current, (left, right), evaluation,
-                                         x0=initial[lane], max_step=max_step)
-                    initial[lane] = sol.y[:, -1]
-                    blocks[lo:hi, lane] = sol.y[:2, :hi-lo].T
+                if coupled:
+                    sol = reservoir.simulate(drive, (left, right), evaluation,
+                                             x0=initial, max_step=max_step,
+                                             active_lane=slot % len(dimers))
+                    initial = sol.y[:, -1]
+                    blocks[lo:hi] = sol.y[voltage_indices, :hi-lo].T.reshape(hi-lo, len(dimers), 2)
+                else:
+                    for lane, dimer in enumerate(dimers):
+                        current = drive if lane == slot % len(dimers) else zero_current
+                        sol = dimer.simulate(current, (left, right), evaluation,
+                                             x0=initial[lane], max_step=max_step)
+                        initial[lane] = sol.y[:, -1]
+                        blocks[lo:hi, lane] = sol.y[:2, :hi-lo].T
                 if case.ordering == "age":
                     order = (slot - np.arange(len(dimers))) % len(dimers)
                     blocks[lo:hi] = blocks[lo:hi, order, :]
+        elif coupled:
+            sol = reservoir.simulate(drive, (t[0], t[-1]), times, max_step=max_step)
+            blocks = sol.y[voltage_indices].T.reshape(a.k, len(dimers), 2)
         else:
             # Broadcast lanes share parameters, input, and initial state.
             sol = dimers[0].simulate(drive, (t[0], t[-1]), times, max_step=max_step)

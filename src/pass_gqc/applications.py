@@ -135,6 +135,8 @@ def score_selected(groups, task, a, out):
                                  xi2=case.xi2, r2_ohm=case.r2_ohm, r2_ep_ohm=case.r2_ep_ohm,
                                  seed=case.seed, n_dimers=case.n_dimers, routing=case.routing,
                                  ordering=case.ordering, method=method,
+                                 coupling_l_nh=case.coupling_l_nh,
+                                 coupling_r_ohm=case.coupling_r_ohm,
                                  reservoir_validation_mean=validation_mean,
                                  test=accuracy, ser=1-accuracy, n_test=len(y)))
     write_csv(out.root/"selected_test.csv", rows)
