@@ -3,7 +3,7 @@
 set -euo pipefail
 
 python_bin="${PYTHON_BIN:-python}"
-output_root=pass_gqc/mpsk_coupled_followup
+output_root=results/pass_gqc/mpsk_coupled_followup
 ep_table=results/passive_gqc/device_ep_candidates.csv
 dry_run=false
 case "${1:-}" in
