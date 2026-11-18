@@ -76,7 +76,7 @@ while read -r order condition xi2; do
         --ep-table "$ep_table" --design-indices 5 --xi2 "$xi2" --seeds "$seed" --modes graphene \
         --n-dimers "$dimers" --routing interleaved --ordering age \
         --coupling-l-nh "$inductance" --coupling-r-ohm 1 \
-        --cycles-per-symbol 0.5 --repeats 20 \
+        --cycles-per-symbol 0.5 --repeats 5 \
         --psk-orders "$order" --conditions "$condition" --snr-db 20 \
         --output "$output"
       if ! is_complete "$output" "$order" "$condition" "$xi2" "$seed" "$dimers" "$inductance"; then
