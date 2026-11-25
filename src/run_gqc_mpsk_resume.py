@@ -45,6 +45,22 @@ def check_chunk(path, labels, width, k, times):
         return False
 
 
+# Explicitly supported original feature runner; this patch changes only resume policy.
+LEGACY_RUNNER_SHA256 = "36c7a543e9ec181c38f7f559d0995edc2d7cb25ed36308e20a891a02e87d7bbd"
+
+def resume_config(existing, requested):
+    ignored = {"grid_seeds", "grid_xi2", "runner_sha256"}
+    changed = [k for k in set(existing) | set(requested)
+               if k not in ignored and existing.get(k) != requested.get(k)]
+    trusted = {LEGACY_RUNNER_SHA256, digest(Path(__file__))}
+    if existing.get("runner_sha256") not in trusted:
+        changed.append("runner_sha256 (unrecognized prior runner)")
+    if changed:
+        raise ValueError("Configuration/source changed: " + ", ".join(sorted(changed)))
+    # Keep original metadata/fingerprint to preserve existing feature/readout caches.
+    return existing
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--repo", type=Path, default=Path.cwd())
@@ -53,8 +69,8 @@ def main():
     p.add_argument("--dimers", type=int, nargs="+", default=[1, 2, 4])
     p.add_argument("--orders", type=int, nargs="+", default=[4, 8, 16, 32])
     p.add_argument("--conditions", nargs="+", choices=["clean", "awgn", "isi"], default=["clean", "awgn", "isi"])
-    p.add_argument("--xi2", type=float, nargs="+", default=[.5, 2, 12]) #default=[.5, 1, 2, 4, 8, 12])
-    p.add_argument("--seeds", type=int, nargs="+", default=[42]) #default=[42, 43, 44])
+    p.add_argument("--xi2", type=float, nargs="+", default=[.5, 1, 2, 4, 8, 12])
+    p.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
     p.add_argument("--repeats", type=int, default=20)
     p.add_argument("--chunk-size", type=int, default=16, help="Trials committed per checkpoint")
     p.add_argument("--amplitude", type=float, default=.001)
@@ -137,9 +153,14 @@ def main():
             directory = a.output / f"{order}psk_{condition}" / f"{case.n_dimers}dimers" / f"xi2_{case.xi2:g}" / f"seed_{case.seed}"
             directory.mkdir(parents=True, exist_ok=True)
             meta = directory / "metadata.json"
-            if meta.exists() and json.loads(meta.read_text()) != config:
-                raise ValueError(f"Configuration/source changed in {directory}. Use another --output to preserve this run.")
-            atomic_json(meta, config)
+            if meta.exists():
+                try:
+                    config = resume_config(json.loads(meta.read_text()), config)
+                except ValueError as error:
+                    raise ValueError(f"{error} in {directory}. Use another --output to preserve this run.") from error
+                fingerprint = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
+            else:
+                atomic_json(meta, config)
             print(str(directory.relative_to(a.output)), flush=True)
             arrays = {}
             for split_id, split in enumerate(SPLITS):
